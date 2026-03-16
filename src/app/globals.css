@@ -1,0 +1,88 @@
+:root {
+  color-scheme: dark;
+  --bg-0: #03070e;
+  --bg-1: #0e1727;
+  --panel: rgba(8, 12, 18, 0.84);
+  --line: rgba(137, 168, 201, 0.22);
+  --text: #e7eef8;
+  --muted: #9db0c8;
+  --accent: #2ea8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(circle at 20% 0%, var(--bg-1) 0%, var(--bg-0) 45%);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+/* ---- Responsive toolbar ---- */
+.geo-toolbar {
+  width: min(40%, 540px);
+}
+
+.geo-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .geo-toolbar {
+    width: calc(100vw - 20px) !important;
+    left: 5px !important;
+    right: 5px !important;
+    top: 5px !important;
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+    border-radius: 6px !important;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .geo-toolbar table {
+    width: 100%;
+  }
+
+  .geo-toolbar td {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  .geo-toolbar label {
+    font-size: 12px;
+    margin-right: 4px;
+  }
+
+  .geo-toolbar input[type="file"] {
+    width: 100%;
+    font-size: 12px;
+  }
+
+  /* Move joysticks higher on small screens so toolbar doesn't overlap */
+  .dj-left {
+    transform: translate(30px, -30px) scale(0.82) !important;
+  }
+  .dj-right {
+    transform: translate(-30px, -30px) scale(0.82) !important;
+  }
+}
