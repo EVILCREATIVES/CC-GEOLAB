@@ -15,8 +15,8 @@ export default function ConvertPanel() {
         title="Convert 2D KMZ to 3D KMZ"
         style={{
           position: "fixed",
-          bottom: 24,
-          left: 24,
+          top: 12,
+          right: 60,
           zIndex: 10001,
           display: "flex",
           alignItems: "center",
