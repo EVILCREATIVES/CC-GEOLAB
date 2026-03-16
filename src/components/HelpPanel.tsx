@@ -13,6 +13,38 @@ const starterPrompts = [
   "What checks should I run on uncertain vein traces?",
 ];
 
+function RobotIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {/* antenna */}
+      <line x1="12" y1="2" x2="12" y2="5" />
+      <circle cx="12" cy="2" r="1" fill="currentColor" stroke="none" />
+      {/* head */}
+      <rect x="4" y="5" width="16" height="10" rx="2" />
+      {/* eyes */}
+      <circle cx="9" cy="10" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="10" r="1.4" fill="currentColor" stroke="none" />
+      {/* mouth */}
+      <line x1="9" y1="13" x2="15" y2="13" />
+      {/* body */}
+      <rect x="6" y="15" width="12" height="5" rx="1.5" />
+      {/* arms */}
+      <line x1="4" y1="8" x2="2" y2="10" />
+      <line x1="20" y1="8" x2="22" y2="10" />
+    </svg>
+  );
+}
+
 function useIsMobile(breakpoint = 768) {
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
@@ -87,24 +119,24 @@ export default function HelpPanel() {
         style={{
           position: "absolute",
           right: 14,
-          top: 14,
+          bottom: 14,
           zIndex: 10050,
-          width: 48,
-          height: 48,
+          width: 52,
+          height: 52,
           borderRadius: "50%",
           border: "1px solid var(--line)",
           background: "var(--panel)",
           backdropFilter: "blur(8px)",
           color: "var(--text)",
-          fontSize: 22,
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           boxShadow: "0 4px 16px rgba(0,0,0,.45)",
+          padding: 0,
         }}
       >
-        ✨
+        <RobotIcon size={28} />
       </button>
     );
   }
@@ -114,7 +146,7 @@ export default function HelpPanel() {
       style={{
         position: "absolute",
         right: isMobile ? 0 : 14,
-        top: isMobile ? 0 : 14,
+        top: isMobile ? 0 : 60,
         bottom: isMobile ? 0 : 14,
         width: isMobile ? "100%" : "min(360px, calc(100vw - 28px))",
         zIndex: 10050,
@@ -128,7 +160,10 @@ export default function HelpPanel() {
     >
       <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontWeight: 700, letterSpacing: 0.3 }}>Geo Assistant</div>
+          <div style={{ fontWeight: 700, letterSpacing: 0.3, display: "flex", alignItems: "center", gap: 8 }}>
+            <RobotIcon size={18} />
+            Geo Assistant
+          </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
             Gemini 3.1 Pro Preview consultation for interpretation and QA.
           </div>
