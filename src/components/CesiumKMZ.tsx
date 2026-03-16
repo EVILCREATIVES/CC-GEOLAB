@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { useEffect, useRef } from "react";
+import { useGeoData, type GeoEntity, type GeoFileSummary } from "@/context/GeoDataContext";
 
 function ensureHeadAsset(tag: "link" | "script", attrs: Record<string, string>) {
   const selector = tag === "link" ? `link[href="${attrs.href}"]` : `script[src="${attrs.src}"]`;
@@ -45,6 +46,7 @@ export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const { setSummary } = useGeoData();
 
   useEffect(() => {
     const rootNode = rootRef.current;
@@ -543,6 +545,75 @@ ${rows.join("")}
         viewer.scene.requestRender();
       }
 
+      function emitSummary(dsLocal: any, fileName: string) {
+        const now = Cesium.JulianDate.now();
+        const folderSet = new Set<string>();
+        const entities: GeoEntity[] = [];
+
+        for (const e of dsLocal.entities.values) {
+          const folder = e.parent?.name || "(root)";
+          folderSet.add(folder);
+
+          let type: GeoEntity["type"] = "other";
+          if (e.point || e.billboard) type = "point";
+          else if (e.polyline) type = "polyline";
+          else if (e.polygon) type = "polygon";
+          else if (e.label) type = "label";
+
+          const props: Record<string, string | number> = {};
+          if (e.properties) {
+            const names = e.properties.propertyNames || [];
+            for (const pn of names) {
+              try {
+                const raw = e.properties[pn]?.getValue?.(now) ?? e.properties[pn];
+                if (raw != null) props[pn] = typeof raw === "number" ? raw : String(raw);
+              } catch { /* skip */ }
+            }
+          }
+
+          entities.push({ name: e.name || "(unnamed)", folder, type, properties: props });
+        }
+
+        // Build compact text for LLM (cap at ~6k chars)
+        const lines: string[] = [
+          `File: ${fileName}`,
+          `Folders: ${[...folderSet].join(", ")}`,
+          `Total entities: ${entities.length}`,
+          "",
+        ];
+
+        const byFolder = new Map<string, typeof entities>();
+        for (const ent of entities) {
+          if (!byFolder.has(ent.folder)) byFolder.set(ent.folder, []);
+          byFolder.get(ent.folder)!.push(ent);
+        }
+
+        for (const [folder, ents] of byFolder) {
+          lines.push(`## Folder: ${folder} (${ents.length} entities)`);
+          // Show up to 30 entities per folder for context
+          for (const ent of ents.slice(0, 30)) {
+            const propStr = Object.entries(ent.properties)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(", ");
+            lines.push(`  - [${ent.type}] ${ent.name}${propStr ? " | " + propStr : ""}`);
+          }
+          if (ents.length > 30) lines.push(`  ... and ${ents.length - 30} more`);
+          lines.push("");
+        }
+
+        let llmContext = lines.join("\n");
+        if (llmContext.length > 6000) llmContext = llmContext.slice(0, 5950) + "\n... (truncated)";
+
+        const summary: GeoFileSummary = {
+          fileName,
+          folderNames: [...folderSet],
+          entityCount: entities.length,
+          entities,
+          llmContext,
+        };
+        setSummary(summary);
+      }
+
       async function loadFromFile(file: File) {
         if (!file) return;
         if (ds) viewer.dataSources.remove(ds, true);
@@ -561,6 +632,7 @@ ${rows.join("")}
 
           await applyAll();
           await flyCloserToDataSource(ds);
+          emitSummary(ds, sourceName);
 
           if (btnLoad) btnLoad.disabled = false;
         };
@@ -607,6 +679,7 @@ ${rows.join("")}
 
           await applyAll();
           await flyCloserToDataSource(ds);
+          emitSummary(ds, file.name || "upload");
 
           if (btnLoad) btnLoad.disabled = false;
         } catch (err) {
@@ -1128,7 +1201,8 @@ ${rows.join("")}
       if (joystickInterval) clearInterval(joystickInterval);
       (rootNode || document).querySelectorAll(".dj-wrap").forEach((n) => n.remove());
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSummary]);
 
   return (
     <div ref={rootRef} style={{ width: "100%", height: "100%", position: "relative" }}>

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useGeoData } from "@/context/GeoDataContext";
 
 type Message = {
   role: "user" | "assistant";
@@ -64,6 +65,7 @@ export default function HelpPanel() {
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
+  const { summary } = useGeoData();
 
   // On desktop, default to open; on mobile, default to closed
   useEffect(() => {
@@ -88,7 +90,7 @@ export default function HelpPanel() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({ messages: nextMessages, fileContext: summary?.llmContext ?? null }),
       });
 
       const data = (await response.json()) as { text?: string; error?: string };
@@ -185,6 +187,13 @@ export default function HelpPanel() {
           ✕
         </button>
       </div>
+
+      {summary && (
+        <div style={{ padding: "6px 14px", borderBottom: "1px solid var(--line)", fontSize: 11, color: "var(--accent)", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
+          Analyzing: {summary.fileName} ({summary.entityCount} entities, {summary.folderNames.length} folders)
+        </div>
+      )}
 
       <div
         style={{

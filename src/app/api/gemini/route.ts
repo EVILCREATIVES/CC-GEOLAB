@@ -17,9 +17,11 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as {
       messages?: ChatMessage[];
+      fileContext?: string | null;
     };
 
     const messages = body.messages ?? [];
+    const fileContext = typeof body.fileContext === "string" ? body.fileContext.slice(0, 8000) : null;
     const sanitized = messages
       .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.text === "string")
       .slice(-12);
@@ -28,8 +30,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No messages provided." }, { status: 400 });
     }
 
-    const systemPrompt =
-      "You are a geological data consultation assistant for a Cesium KMZ/KML viewer. Be concise, practical, and safety-aware. If uncertain, say what additional data is needed.";
+    const systemPrompt = fileContext
+      ? `You are a geological data consultation assistant for a Cesium KMZ/KML viewer. The user has loaded the following geological data file. Analyze it and answer questions about it. Be concise, practical, and safety-aware. If uncertain, say what additional data is needed.\n\n--- LOADED FILE DATA ---\n${fileContext}\n--- END FILE DATA ---`
+      : "You are a geological data consultation assistant for a Cesium KMZ/KML viewer. No file is currently loaded. You can still answer general geological interpretation questions. Be concise, practical, and safety-aware.";
 
     const contents = [
       {
