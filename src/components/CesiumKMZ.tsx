@@ -42,30 +42,94 @@ async function waitForGlobal(name: string, timeoutMs = 8000) {
   return null;
 }
 
-// ── Gemini-powered KML 3D depth transform ──────────────────────
-async function transformKmlViaGemini(kmlText: string): Promise<string> {
-  try {
-    const resp = await fetch("/api/gemini/transform", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kmlText }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      console.error("[3D Transform] Gemini API error:", (err as any).error || resp.statusText);
-      return kmlText;
-    }
-    const data = (await resp.json()) as { kml?: string; error?: string };
-    if (data.error || !data.kml) {
-      console.error("[3D Transform] Gemini returned error:", data.error);
-      return kmlText;
-    }
-    console.log("[3D Transform] Gemini successfully transformed KML");
-    return data.kml;
-  } catch (err) {
-    console.error("[3D Transform] fetch failed:", err);
-    return kmlText;
-  }
+// ── Instant client-side KML 3D depth transform (string-based) ──
+const DEPTH_RE = /(\d+(?:\.\d+)?)\s*'?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(m|ft|feet|foot|'|meter|meters)?\s*'?\s*$/i;
+const FEET_SET = new Set(["ft", "feet", "foot", "'"]);
+const HALF_LON = 0.0001;
+const HALF_LAT = 0.000075;
+
+function transformKmlFor3D(kml: string): string {
+  // Use a regex to find each <Placemark>…</Placemark> block that has a Point
+  const pmRe = /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
+  const nameRe = /<name>\s*<!\[CDATA\[(.*?)\]\]>\s*<\/name>|<name>(.*?)<\/name>/i;
+  const coordRe = /<Point[^>]*>[\s\S]*?<coordinates>\s*([\d.eE+-]+),([\d.eE+-]+)/i;
+  const styleRe = /<styleUrl>(.*?)<\/styleUrl>/i;
+
+  let count = 0;
+
+  const result = kml.replace(pmRe, (fullMatch, inner: string) => {
+    const nm = nameRe.exec(inner);
+    const rawName = (nm?.[1] ?? nm?.[2] ?? "").trim();
+    const dm = DEPTH_RE.exec(rawName);
+    if (!dm) return fullMatch;
+
+    const cm = coordRe.exec(inner);
+    if (!cm) return fullMatch;
+
+    const lon = parseFloat(cm[1]);
+    const lat = parseFloat(cm[2]);
+    if (isNaN(lon) || isNaN(lat)) return fullMatch;
+
+    const d1 = parseFloat(dm[1]);
+    const d2 = parseFloat(dm[2]);
+    const unit = dm[3] || "'";
+    const isFeet = FEET_SET.has(unit.toLowerCase());
+    const factor = isFeet ? 0.3048 : 1;
+    const topM = Math.min(d1, d2) * factor;
+    const botM = Math.max(d1, d2) * factor;
+    const uLabel = isFeet ? "'" : "m";
+
+    const baseName = rawName.slice(0, dm.index).replace(/[\s/\\]+$/, "").trim() || "Deposit";
+
+    const sm = styleRe.exec(inner);
+    const styleTag = sm ? `<styleUrl>${sm[1]}</styleUrl>` : "";
+    const depthData = `<ExtendedData><Data name="_3dDepth"><value>true</value></Data></ExtendedData>`;
+
+    const c = [
+      [lon - HALF_LON, lat - HALF_LAT],
+      [lon + HALF_LON, lat - HALF_LAT],
+      [lon + HALF_LON, lat + HALF_LAT],
+      [lon - HALF_LON, lat + HALF_LAT],
+    ];
+    const f = (lo: number, la: number, z: number) =>
+      `${lo.toFixed(10)},${la.toFixed(10)},${z.toFixed(4)}`;
+
+    const topFace = c.map(([lo, la]) => f(lo, la, -topM)).join(" ") + " " + f(c[0][0], c[0][1], -topM);
+    const botFace = c.map(([lo, la]) => f(lo, la, -botM)).join(" ") + " " + f(c[0][0], c[0][1], -botM);
+
+    const sides = [[0,1],[1,2],[2,3],[3,0]].map(([i,j]) =>
+      `<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${
+        f(c[i][0],c[i][1],-topM)} ${f(c[j][0],c[j][1],-topM)} ${f(c[j][0],c[j][1],-botM)} ${f(c[i][0],c[i][1],-botM)} ${f(c[i][0],c[i][1],-topM)
+      }</coordinates></LinearRing></outerBoundaryIs></Polygon>`
+    ).join("\n");
+
+    count++;
+
+    return `<Placemark>
+<name>${baseName}/ Top ${dm[1]}${uLabel}</name>
+${styleTag}
+${depthData}
+<Point><altitudeMode>relativeToGround</altitudeMode><coordinates>${lon},${lat},${-topM}</coordinates></Point>
+</Placemark>
+<Placemark>
+<name>${baseName}/ Bottom ${dm[2]}${uLabel}</name>
+${styleTag}
+${depthData}
+<Point><altitudeMode>relativeToGround</altitudeMode><coordinates>${lon},${lat},${-botM}</coordinates></Point>
+</Placemark>
+<Placemark>
+<name>${baseName}/ ${dm[1]}-${dm[2]}${uLabel}</name>
+${depthData}
+<MultiGeometry>
+<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${topFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${botFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+${sides}
+</MultiGeometry>
+</Placemark>`;
+  });
+
+  console.log(`[3D Transform] Converted ${count} depth placemarks`);
+  return result;
 }
 
 export default function CesiumKMZ() {
@@ -701,12 +765,9 @@ ${rows.join("")}
         try {
           if (name.endsWith(".kml")) {
             const txt = await readAsText(file);
-            setStatus("Analyzing with AMRT AI…");
-            const txt3d = await transformKmlViaGemini(txt);
-            setStatus("Loading…");
+            const txt3d = transformKmlFor3D(txt);
             const xml = new DOMParser().parseFromString(txt3d, "application/xml");
             await loadKmlXml(xml, file.name);
-            setStatus("");
             return;
           }
 
@@ -728,12 +789,9 @@ ${rows.join("")}
             }
 
             const kmlText = await zip.file(kmlPath).async("text");
-            setStatus("Analyzing with AMRT AI…");
-            const kml3d = await transformKmlViaGemini(kmlText);
-            setStatus("Loading…");
+            const kml3d = transformKmlFor3D(kmlText);
             const xml = new DOMParser().parseFromString(kml3d, "application/xml");
             await loadKmlXml(xml, kmlPath);
-            setStatus("");
             return;
           }
 
