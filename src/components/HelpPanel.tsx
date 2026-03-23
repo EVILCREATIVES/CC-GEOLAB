@@ -155,7 +155,7 @@ export default function HelpPanel() {
         position: "absolute",
         right: isMobile ? 0 : 14,
         top: isMobile ? 0 : 60,
-        bottom: isMobile ? 0 : 14,
+        bottom: isMobile ? 0 : 200,
         width: isMobile ? "100%" : "min(360px, calc(100vw - 28px))",
         zIndex: 10050,
         background: "var(--panel)",

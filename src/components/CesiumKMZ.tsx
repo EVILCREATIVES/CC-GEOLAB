@@ -1399,6 +1399,17 @@ ${rows.join("")}
                 </div>
               </td>
             </tr>
+
+            <tr>
+              <td>
+                <details id="settingsDetails" style={{ marginTop: 2 }}>
+                  <summary style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
+                    ⚙ Settings
+                  </summary>
+                  <div id="settingsBody" style={{ paddingTop: 6 }} />
+                </details>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
