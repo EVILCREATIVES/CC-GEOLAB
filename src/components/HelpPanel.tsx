@@ -9,9 +9,9 @@ type Message = {
 };
 
 const starterPrompts = [
-  "Analyze the resource signatures and rank anomalies by confidence.",
-  "What do the depth ranges suggest about subsurface structure?",
-  "Identify data quality concerns and recommend follow-up actions.",
+  "What is AMRT and how does it detect subsurface resources?",
+  "Analyze the loaded data and rank targets by discovery confidence.",
+  "What do the depth ranges and signatures suggest for drill validation?",
 ];
 
 function RobotIcon({ size = 24 }: { size?: number }) {
@@ -174,7 +174,7 @@ export default function HelpPanel() {
             AMRT Analyst
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            CC Explorations — Professional AMRT resource analysis.
+            CC Explorations — Atomic Mineral Resonance Tomography
           </div>
         </div>
         <button
@@ -246,7 +246,7 @@ export default function HelpPanel() {
       >
         {messages.length === 0 && (
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            Ask about magnetic anomalies, radiometric signatures, resource classification, depth correlations, or exploration targets.
+            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, or exploration targets.
           </div>
         )}
 
@@ -277,7 +277,7 @@ export default function HelpPanel() {
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about AMRT data, resource signatures, depth models..."
+          placeholder="Ask about AMRT analysis, subsurface targets, depth models..."
           rows={3}
           style={{
             width: "100%",
