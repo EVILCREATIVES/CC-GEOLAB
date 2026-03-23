@@ -42,6 +42,183 @@ async function waitForGlobal(name: string, timeoutMs = 8000) {
   return null;
 }
 
+// ── Client-side KML 3D depth transform ─────────────────────────
+const DEPTH_RANGE_RE = /(\d+(?:\.\d+)?)\s*'?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(m|ft|feet|foot|'|meter|meters)?\s*'?\s*$/i;
+const FEET_UNITS = new Set(["ft", "feet", "foot", "'"]);
+const BOX_HALF_LON = 0.0001;
+const BOX_HALF_LAT = 0.000075;
+
+function transformKmlFor3D(kmlText: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(kmlText, "application/xml");
+  const ns = doc.documentElement?.namespaceURI || "http://www.opengis.net/kml/2.2";
+
+  function getEls(parent: Element | Document, tag: string): Element[] {
+    let elems = parent.getElementsByTagNameNS(ns, tag);
+    if (elems.length === 0) elems = parent.getElementsByTagName(tag);
+    return Array.from(elems) as Element[];
+  }
+
+  function el(tag: string, text?: string): Element {
+    const e = doc.createElementNS(ns, tag);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function depthToMeters(val: number, unit: string): number {
+    const u = unit.toLowerCase().trim();
+    if (["m", "meter", "meters"].includes(u)) return val;
+    return val * 0.3048;
+  }
+
+  const placemarks = getEls(doc, "Placemark");
+  const toProcess: {
+    pm: Element; name: string; match: RegExpExecArray;
+    lon: number; lat: number; styleUrl: string; lookAt: Element | null;
+  }[] = [];
+
+  for (const pm of placemarks) {
+    const nameEl = getEls(pm, "name").find((n) => n.parentNode === pm);
+    const name = nameEl?.textContent?.trim() || "";
+
+    const match = DEPTH_RANGE_RE.exec(name);
+    if (!match) continue;
+
+    const points = getEls(pm, "Point");
+    if (!points.length) continue;
+
+    const coordsEl = getEls(points[0], "coordinates")[0];
+    if (!coordsEl) continue;
+
+    const parts = (coordsEl.textContent || "").trim().split(",");
+    if (parts.length < 2) continue;
+
+    const lon = parseFloat(parts[0]);
+    const lat = parseFloat(parts[1]);
+    if (isNaN(lon) || isNaN(lat)) continue;
+
+    const styleUrlEl = getEls(pm, "styleUrl").find((s) => s.parentNode === pm);
+    const lookAtEls = getEls(pm, "LookAt");
+
+    toProcess.push({
+      pm, name, match, lon, lat,
+      styleUrl: styleUrlEl?.textContent || "",
+      lookAt: lookAtEls.find((l) => l.parentNode === pm) || null,
+    });
+  }
+
+  for (const { pm, name, match, lon, lat, styleUrl, lookAt } of toProcess) {
+    const d1 = parseFloat(match[1]);
+    const d2 = parseFloat(match[2]);
+    const unit = match[3] || "'";
+    const topM = depthToMeters(Math.min(d1, d2), unit);
+    const botM = depthToMeters(Math.max(d1, d2), unit);
+
+    const baseName = name.slice(0, match.index).replace(/[\s/\\]+$/, "").trim() || "Deposit";
+    const unitLabel = FEET_UNITS.has(unit.toLowerCase()) ? "'" : "m";
+
+    function addDepthMarker(placemark: Element) {
+      const ed = el("ExtendedData");
+      const d = el("Data");
+      d.setAttribute("name", "_3dDepth");
+      d.appendChild(el("value", "true"));
+      ed.appendChild(d);
+      placemark.appendChild(ed);
+    }
+
+    function cloneLookAt(alt: number): Element | null {
+      if (!lookAt) return null;
+      const clone = lookAt.cloneNode(true) as Element;
+      const altEls = getEls(clone, "altitude");
+      if (altEls.length) altEls[0].textContent = String(alt);
+      return clone;
+    }
+
+    const parent = pm.parentNode!;
+
+    // ── Top point ──
+    const topPm = el("Placemark");
+    topPm.appendChild(el("name", `${baseName}/ Top ${match[1]}${unitLabel}`));
+    const topLA = cloneLookAt(-topM);
+    if (topLA) topPm.appendChild(topLA);
+    if (styleUrl) topPm.appendChild(el("styleUrl", styleUrl));
+    const topPt = el("Point");
+    topPt.appendChild(el("altitudeMode", "relativeToGround"));
+    topPt.appendChild(el("coordinates", `${lon},${lat},${-topM}`));
+    topPm.appendChild(topPt);
+    addDepthMarker(topPm);
+
+    // ── Bottom point ──
+    const botPm = el("Placemark");
+    botPm.appendChild(el("name", `${baseName}/ Bottom ${match[2]}${unitLabel}`));
+    const botLA = cloneLookAt(-botM);
+    if (botLA) botPm.appendChild(botLA);
+    if (styleUrl) botPm.appendChild(el("styleUrl", styleUrl));
+    const botPt = el("Point");
+    botPt.appendChild(el("altitudeMode", "relativeToGround"));
+    botPt.appendChild(el("coordinates", `${lon},${lat},${-botM}`));
+    botPm.appendChild(botPt);
+    addDepthMarker(botPm);
+
+    // ── Deposit box (MultiGeometry: 6 polygon faces) ──
+    const depPm = el("Placemark");
+    depPm.appendChild(el("name", `${baseName}/ ${match[1]}-${match[2]}${unitLabel}`));
+    addDepthMarker(depPm);
+
+    const mg = el("MultiGeometry");
+    const corners: [number, number][] = [
+      [lon - BOX_HALF_LON, lat - BOX_HALF_LAT],
+      [lon + BOX_HALF_LON, lat - BOX_HALF_LAT],
+      [lon + BOX_HALF_LON, lat + BOX_HALF_LAT],
+      [lon - BOX_HALF_LON, lat + BOX_HALF_LAT],
+    ];
+
+    function faceCoords(pts: [number, number][], z: number): string {
+      return (
+        pts.map(([lo, la]) => `${lo.toFixed(10)},${la.toFixed(10)},${z.toFixed(4)}`).join("\n") +
+        `\n${pts[0][0].toFixed(10)},${pts[0][1].toFixed(10)},${z.toFixed(4)}`
+      );
+    }
+
+    function makePoly(coords: string): Element {
+      const poly = el("Polygon");
+      poly.appendChild(el("altitudeMode", "relativeToGround"));
+      const outer = el("outerBoundaryIs");
+      const lr = el("LinearRing");
+      lr.appendChild(el("coordinates", coords));
+      outer.appendChild(lr);
+      poly.appendChild(outer);
+      return poly;
+    }
+
+    // Top & bottom faces
+    mg.appendChild(makePoly(faceCoords(corners, -topM)));
+    mg.appendChild(makePoly(faceCoords(corners, -botM)));
+
+    // 4 side faces
+    const sides: [number, number][] = [[0, 1], [1, 2], [2, 3], [3, 0]];
+    for (const [i, j] of sides) {
+      const sc = [
+        `${corners[i][0].toFixed(10)},${corners[i][1].toFixed(10)},${(-topM).toFixed(4)}`,
+        `${corners[j][0].toFixed(10)},${corners[j][1].toFixed(10)},${(-topM).toFixed(4)}`,
+        `${corners[j][0].toFixed(10)},${corners[j][1].toFixed(10)},${(-botM).toFixed(4)}`,
+        `${corners[i][0].toFixed(10)},${corners[i][1].toFixed(10)},${(-botM).toFixed(4)}`,
+        `${corners[i][0].toFixed(10)},${corners[i][1].toFixed(10)},${(-topM).toFixed(4)}`,
+      ].join("\n");
+      mg.appendChild(makePoly(sc));
+    }
+
+    depPm.appendChild(mg);
+
+    parent.insertBefore(topPm, pm);
+    parent.insertBefore(botPm, pm);
+    parent.insertBefore(depPm, pm);
+    parent.removeChild(pm);
+  }
+
+  return new XMLSerializer().serializeToString(doc);
+}
+
 export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -272,6 +449,16 @@ ${rows.join("")}
         return /\b(min|max)\b/i.test(e.name || "");
       }
 
+      function is3dDepth(e: any): boolean {
+        const chk = (o: any) => {
+          try {
+            const v = o?.properties?._3dDepth;
+            return v && String(typeof v.getValue === "function" ? v.getValue() : v) === "true";
+          } catch { return false; }
+        };
+        return chk(e) || chk(e?.parent);
+      }
+
       function drapePolygonToGround(pg: any, owner?: any) {
         const name = (owner?.name || "").toLowerCase();
         if (/\bmin depth polygon\b/.test(name) || /\bmax depth polygon\b/.test(name)) {
@@ -471,6 +658,7 @@ ${rows.join("")}
 
         for (const e of ds.entities.values) {
           if (e.polygon) {
+            if (is3dDepth(e)) continue;
             const hasExtruded =
               e.polygon.extrudedHeight &&
               (e.polygon.extrudedHeight.getValue?.(now) ?? e.polygon.extrudedHeight) !== undefined;
@@ -491,6 +679,7 @@ ${rows.join("")}
         }
 
         for (const e of ds.entities.values) {
+          if (is3dDepth(e)) continue;
           if (e.point) e.point.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
           if (e.billboard) {
             e.billboard.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
@@ -658,7 +847,8 @@ ${rows.join("")}
         try {
           if (name.endsWith(".kml")) {
             const txt = await readAsText(file);
-            const xml = new DOMParser().parseFromString(txt, "application/xml");
+            const txt3d = transformKmlFor3D(txt);
+            const xml = new DOMParser().parseFromString(txt3d, "application/xml");
             await loadKmlXml(xml, file.name);
             return;
           }
@@ -681,7 +871,8 @@ ${rows.join("")}
             }
 
             const kmlText = await zip.file(kmlPath).async("text");
-            const xml = new DOMParser().parseFromString(kmlText, "application/xml");
+            const kml3d = transformKmlFor3D(kmlText);
+            const xml = new DOMParser().parseFromString(kml3d, "application/xml");
             await loadKmlXml(xml, kmlPath);
             return;
           }

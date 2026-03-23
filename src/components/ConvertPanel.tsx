@@ -1,48 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 const HF_SPACE_URL = "https://evilcreatives-kmz-app.hf.space";
 
 export default function ConvertPanel() {
   const [open, setOpen] = useState(false);
+  const [host, setHost] = useState<HTMLElement | null>(null);
 
-  return (
-    <>
-      {/* Floating button */}
-      <button
-        onClick={() => setOpen(true)}
-        title="Convert 2D KMZ to 3D KMZ"
-        style={{
-          position: "fixed",
-          top: 12,
-          right: 60,
-          zIndex: 10001,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          background: "#1a73e8",
-          color: "#fff",
-          border: "none",
-          borderRadius: 8,
-          padding: "10px 16px",
-          fontSize: 14,
-          fontWeight: 600,
-          cursor: "pointer",
-          boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
-          fontFamily: "system-ui, sans-serif",
-        }}
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const el = document.getElementById("settingsBody");
+      if (el) {
+        setHost(el);
+        clearInterval(iv);
+      }
+    }, 200);
+    return () => clearInterval(iv);
+  }, []);
+
+  const button = (
+    <button
+      onClick={() => setOpen(true)}
+      title="Convert 2D KMZ to 3D KMZ (external tool)"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        background: "#1a73e8",
+        color: "#fff",
+        border: "none",
+        borderRadius: 6,
+        padding: "8px 14px",
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+        width: "100%",
+        justifyContent: "center",
+        marginTop: 8,
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 2L2 7l10 5 10-5-10-5z" />
-          <path d="M2 17l10 5 10-5" />
-          <path d="M2 12l10 5 10-5" />
-        </svg>
-        2D → 3D
-      </button>
+        <path d="M12 2L2 7l10 5 10-5-10-5z" />
+        <path d="M2 17l10 5 10-5" />
+        <path d="M2 12l10 5 10-5" />
+      </svg>
+      2D → 3D Converter
+    </button>
+  );
 
-      {/* Modal overlay */}
-      {open && (
+  const modal = open
+    ? createPortal(
         <div
           style={{
             position: "fixed",
@@ -69,7 +88,6 @@ export default function ConvertPanel() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
             <div
               style={{
                 display: "flex",
@@ -80,7 +98,14 @@ export default function ConvertPanel() {
                 borderBottom: "1px solid #333",
               }}
             >
-              <span style={{ color: "#fff", fontSize: 15, fontWeight: 600, fontFamily: "system-ui, sans-serif" }}>
+              <span
+                style={{
+                  color: "#fff",
+                  fontSize: 15,
+                  fontWeight: 600,
+                  fontFamily: "system-ui, sans-serif",
+                }}
+              >
                 KMZ 2D → 3D Converter
               </span>
               <button
@@ -99,21 +124,23 @@ export default function ConvertPanel() {
                 ✕ Close
               </button>
             </div>
-
-            {/* Iframe */}
             <iframe
               src={HF_SPACE_URL}
-              style={{
-                flex: 1,
-                width: "100%",
-                border: "none",
-              }}
+              style={{ flex: 1, width: "100%", border: "none" }}
               title="KMZ 2D to 3D Converter"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
             />
           </div>
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  if (!host) return <>{modal}</>;
+  return (
+    <>
+      {createPortal(button, host)}
+      {modal}
     </>
   );
 }
