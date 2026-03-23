@@ -3,6 +3,7 @@
 import CesiumKMZ from "@/components/CesiumKMZ";
 import HelpPanel from "@/components/HelpPanel";
 import ConvertPanel from "@/components/ConvertPanel";
+import SettingsPanel from "@/components/SettingsPanel";
 import { GeoDataProvider } from "@/context/GeoDataContext";
 
 export default function HomePage() {
@@ -12,6 +13,7 @@ export default function HomePage() {
         <CesiumKMZ />
         <HelpPanel />
         <ConvertPanel />
+        <SettingsPanel />
       </main>
     </GeoDataProvider>
   );

@@ -844,11 +844,14 @@ ${rows.join("")}
         const PAD = 140;
         const KN = 52;
         const RADIUS = (PAD - KN) / 2;
-        const DEAD = 0.08;
-        const DAMP = 0.22;
-
-        const clampDead = (v: number) => (Math.abs(v) < DEAD ? 0 : v);
+        const BASE_DEAD = 0.08;
+        const BASE_DAMP = 0.22;
         const BASE_STRAFE = 18.0;
+
+        const js = () => (window as any).__joystickSettings || {};
+        const getDead = () => js().deadZone ?? BASE_DEAD;
+        const getDamp = () => js().damping ?? BASE_DAMP;
+        const clampDead = (v: number) => (Math.abs(v) < getDead() ? 0 : v);
 
         const ORBIT: { pivot: any; range: number } = {
           pivot: null,
@@ -966,8 +969,9 @@ ${rows.join("")}
           const startSnapBack = () => {
             stopSnapBack();
             snapBackId = window.setInterval(() => {
-              state[which].x *= 1 - DAMP;
-              state[which].y *= 1 - DAMP;
+              const d = getDamp();
+              state[which].x *= 1 - d;
+              state[which].y *= 1 - d;
               setKnob(state[which].x * RADIUS, state[which].y * RADIUS);
               if (Math.hypot(state[which].x, state[which].y) < 0.01) {
                 state[which].x = 0;
@@ -1054,8 +1058,8 @@ ${rows.join("")}
           let lastY = 0;
 
           const clamp01 = (v: number) => Math.max(-1, Math.min(1, v));
-          const PX_TO_UNIT_LEFT = 1 / 70;
-          const PX_TO_UNIT_RIGHT = 1 / 90;
+          const PX_TO_UNIT_LEFT_BASE = 1 / 70;
+          const PX_TO_UNIT_RIGHT_BASE = 1 / 90;
 
           const end = () => {
             if (dragging === "left") {
@@ -1105,8 +1109,9 @@ ${rows.join("")}
               lastY = e.clientY;
 
               if (dragging === "left") {
-                state.left.x = clamp01(state.left.x + dx * PX_TO_UNIT_LEFT);
-                state.left.y = clamp01(state.left.y + dy * PX_TO_UNIT_LEFT);
+                const mSens = js().mouseSensitivity ?? 1.0;
+                state.left.x = clamp01(state.left.x + dx * PX_TO_UNIT_LEFT_BASE * mSens);
+                state.left.y = clamp01(state.left.y + dy * PX_TO_UNIT_LEFT_BASE * mSens);
 
                 try {
                   clearOrbitTarget();
@@ -1115,8 +1120,9 @@ ${rows.join("")}
                   // noop
                 }
               } else {
-                state.right.x = clamp01(state.right.x + dx * PX_TO_UNIT_RIGHT);
-                state.right.y = clamp01(state.right.y + dy * PX_TO_UNIT_RIGHT);
+                const mSens = js().mouseSensitivity ?? 1.0;
+                state.right.x = clamp01(state.right.x + dx * PX_TO_UNIT_RIGHT_BASE * mSens);
+                state.right.y = clamp01(state.right.y + dy * PX_TO_UNIT_RIGHT_BASE * mSens);
               }
 
               e.preventDefault();
@@ -1157,7 +1163,8 @@ ${rows.join("")}
             const y = clampDead(state.left.y);
 
             if (x) {
-              const m = BASE_STRAFE * moveScale * Math.abs(x);
+              const mSpeed = js().moveSpeed ?? 1.0;
+              const m = BASE_STRAFE * moveScale * Math.abs(x) * mSpeed;
               if (x < 0) viewer.camera.moveLeft(m);
               else viewer.camera.moveRight(m);
               moved = true;
@@ -1165,7 +1172,8 @@ ${rows.join("")}
             }
 
             if (y) {
-              const z = zoomStep * Math.abs(y);
+              const zSpeed = js().zoomSpeed ?? 1.0;
+              const z = zoomStep * Math.abs(y) * zSpeed;
               if (y < 0) viewer.camera.zoomIn(z);
               else viewer.camera.zoomOut(z);
               ORBIT.range = Math.max(5, ORBIT.range + (y < 0 ? -z : z));
@@ -1190,11 +1198,13 @@ ${rows.join("")}
 
             if (x || y) {
               const rot = rotationScaleFromHeight();
-              const YAW_SPEED = 0.008;
-              const PITCH_SPEED = 0.008;
+              const rSpeed = js().rotateSpeed ?? 1.0;
+              const YAW_SPEED = 0.008 * rSpeed;
+              const PITCH_SPEED = 0.008 * rSpeed;
+              const invertY = js().invertY ?? false;
 
               const dh = -x * YAW_SPEED * rot;
-              const dp = y * PITCH_SPEED * rot;
+              const dp = (invertY ? -y : y) * PITCH_SPEED * rot;
 
               const c = viewer.camera;
               const heading = c.heading + dh;
