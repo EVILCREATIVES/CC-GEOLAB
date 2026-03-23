@@ -485,7 +485,7 @@ export async function processKml(
             const [mnM, mxM] = rng;
             const comm = whichCommodity(pmName) || "";
             if (!basePoints.has(base)) basePoints.set(base, []);
-            basePoints.get(base)!.push({ lon, lat, minM: mnM, maxM: mxM, comm });
+            basePoints.get(base)!.push({ lon, lat, base, minM: mnM, maxM: mxM, comm });
           }
         }
       }
