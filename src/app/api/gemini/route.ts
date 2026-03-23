@@ -31,8 +31,8 @@ export async function POST(request: Request) {
     }
 
     const systemPrompt = fileContext
-      ? `You are a geological data consultation assistant for a Cesium KMZ/KML viewer. The user has loaded the following geological data file. Analyze it and answer questions about it. Be concise, practical, and safety-aware. If uncertain, say what additional data is needed.\n\n--- LOADED FILE DATA ---\n${fileContext}\n--- END FILE DATA ---`
-      : "You are a geological data consultation assistant for a Cesium KMZ/KML viewer. No file is currently loaded. You can still answer general geological interpretation questions. Be concise, practical, and safety-aware.";
+      ? `You are a geological data consultation assistant for a Cesium KMZ/KML viewer. The user has loaded the following geological data file. Analyze it and answer questions about it. Be concise, practical, and safety-aware. If uncertain, say what additional data is needed. Always complete your reasoning—never stop mid-sentence or mid-thought.\n\n--- LOADED FILE DATA ---\n${fileContext}\n--- END FILE DATA ---`
+      : "You are a geological data consultation assistant for a Cesium KMZ/KML viewer. No file is currently loaded. You can still answer general geological interpretation questions. Be concise, practical, and safety-aware. Always complete your reasoning—never stop mid-sentence or mid-thought.";
 
     const contents = [
       {
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
           generationConfig: {
             temperature: 0.3,
             topP: 0.9,
-            maxOutputTokens: 1024,
+            maxOutputTokens: 8192,
           },
         }),
       },

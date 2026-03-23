@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useGeoData } from "@/context/GeoDataContext";
 
 type Message = {
@@ -66,6 +66,7 @@ export default function HelpPanel() {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const { summary } = useGeoData();
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // On desktop, default to open; on mobile, default to closed
   useEffect(() => {
@@ -73,6 +74,11 @@ export default function HelpPanel() {
   }, [isMobile]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
+
+  // Auto-scroll to bottom when messages change or loading state changes
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
 
   async function submitText(text: string) {
     const trimmed = text.trim();
@@ -158,6 +164,7 @@ export default function HelpPanel() {
         backdropFilter: "blur(8px)",
         display: "flex",
         flexDirection: "column",
+        overflow: "hidden",
       }}
     >
       <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -226,8 +233,10 @@ export default function HelpPanel() {
       </div>
 
       <div
+        ref={scrollRef}
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: "auto",
           padding: 12,
           display: "flex",

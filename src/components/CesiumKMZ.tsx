@@ -449,6 +449,24 @@ ${rows.join("")}
       async function applyAll() {
         ["Cu", "Au", "Oil", "H2O", "Gas", "Void"].forEach((n) => colorizeFolder(ds, n));
 
+        // Detect which resource folders are actually present in the data
+        const presentFolders = new Set<string>();
+        for (const e of ds.entities.values) {
+          const folder = e.parent?.name;
+          if (folder && folder in FOLDER_COLOR) presentFolders.add(folder);
+        }
+        // Show/hide resource checkboxes based on what's present
+        const chkMap: Record<string, HTMLInputElement | null> = {
+          Cu: chkCu, Au: chkAu, Oil: chkOil, H2O: chkWater, Gas: chkGas, Void: chkVoid,
+        };
+        for (const [key, chk] of Object.entries(chkMap)) {
+          const lbl = chk?.closest("label") as HTMLElement | null;
+          if (lbl) lbl.style.display = presentFolders.has(key) ? "" : "none";
+        }
+        // Hide the entire resources row if no resources detected
+        const resourcesRow = document.getElementById("resourcesRow");
+        if (resourcesRow) resourcesRow.style.display = presentFolders.size > 0 ? "" : "none";
+
         const now = Cesium.JulianDate.now();
 
         for (const e of ds.entities.values) {
@@ -1303,52 +1321,59 @@ ${rows.join("")}
 
             <tr>
               <td>
-                <label>
-                  <span style={sw("#B87333")} /> Cu <input id="chkCu" type="checkbox" defaultChecked />
-                </label>
-                <label>
-                  <span style={sw("#FFD700")} /> Au <input id="chkAu" type="checkbox" defaultChecked />
-                </label>
-                <label>
-                  <span style={sw("#000000")} /> Oil <input id="chkOil" type="checkbox" defaultChecked />
-                </label>
-                <label>
-                  <span style={sw("#4A86FF")} />H2O <input id="chkWater" type="checkbox" defaultChecked />
-                </label>
-                <label>
-                  <span style={sw("#6EA8A3")} /> Gas <input id="chkGas" type="checkbox" defaultChecked />
-                </label>
-                <label>
-                  <span style={sw("#7BE134")} /> Void <input id="chkVoid" type="checkbox" defaultChecked />
-                </label>
+                <div id="resourcesRow" style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2 }}>
+                  <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Resources</div>
+                  <label>
+                    <span style={sw("#B87333")} /> Cu <input id="chkCu" type="checkbox" defaultChecked />
+                  </label>
+                  <label>
+                    <span style={sw("#FFD700")} /> Au <input id="chkAu" type="checkbox" defaultChecked />
+                  </label>
+                  <label>
+                    <span style={sw("#000000")} /> Oil <input id="chkOil" type="checkbox" defaultChecked />
+                  </label>
+                  <label>
+                    <span style={sw("#4A86FF")} /> H2O <input id="chkWater" type="checkbox" defaultChecked />
+                  </label>
+                  <label>
+                    <span style={sw("#6EA8A3")} /> Gas <input id="chkGas" type="checkbox" defaultChecked />
+                  </label>
+                  <label>
+                    <span style={sw("#7BE134")} /> Void <input id="chkVoid" type="checkbox" defaultChecked />
+                  </label>
+                </div>
               </td>
             </tr>
 
             <tr>
               <td>
-                <label>
-                  <input id="chkLabels" type="checkbox" defaultChecked /> Labels
-                </label>
-                <label>
-                  <input id="chkPins" type="checkbox" defaultChecked /> Pins
-                </label>
-                <label>
-                  <input id="chkSurf" type="checkbox" defaultChecked /> Vein Line
-                </label>
-                <label>
-                  <input id="chkMin" type="checkbox" defaultChecked /> Min Line
-                </label>
-                <label>
-                  <input id="chkMax" type="checkbox" defaultChecked /> Max Line
-                </label>
-                <label>
-                  <input id="chkCol" type="checkbox" defaultChecked /> Columns
-                </label>
+                <div style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2 }}>
+                  <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Display</div>
+                  <label>
+                    <input id="chkLabels" type="checkbox" defaultChecked /> Labels
+                  </label>
+                  <label>
+                    <input id="chkPins" type="checkbox" defaultChecked /> Pins
+                  </label>
+                  <label>
+                    <input id="chkSurf" type="checkbox" defaultChecked /> Vein Line
+                  </label>
+                  <label>
+                    <input id="chkMin" type="checkbox" defaultChecked /> Min Line
+                  </label>
+                  <label>
+                    <input id="chkMax" type="checkbox" defaultChecked /> Max Line
+                  </label>
+                  <label>
+                    <input id="chkCol" type="checkbox" defaultChecked /> Columns
+                  </label>
+                </div>
               </td>
             </tr>
 
             <tr>
               <td>
+                <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Legend</div>
                 <div
                   style={{
                     display: "flex",
