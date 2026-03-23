@@ -1331,7 +1331,7 @@ ${rows.join("")}
 
             <tr>
               <td>
-                <div id="resourcesRow" style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2 }}>
+                <div id="resourcesRow" style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2, display: "none" }}>
                   <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Resources</div>
                   <label>
                     <span style={sw("#B87333")} /> Cu <input id="chkCu" type="checkbox" defaultChecked />

@@ -9,9 +9,9 @@ type Message = {
 };
 
 const starterPrompts = [
-  "Summarize likely lithology from what I loaded.",
-  "How do I interpret min/max depth vs thickness?",
-  "What checks should I run on uncertain vein traces?",
+  "Analyze the resource signatures and rank anomalies by confidence.",
+  "What do the depth ranges suggest about subsurface structure?",
+  "Identify data quality concerns and recommend follow-up actions.",
 ];
 
 function RobotIcon({ size = 24 }: { size?: number }) {
@@ -155,7 +155,7 @@ export default function HelpPanel() {
         position: "absolute",
         right: isMobile ? 0 : 14,
         top: isMobile ? 0 : 60,
-        bottom: isMobile ? 0 : 200,
+        bottom: isMobile ? 0 : 240,
         width: isMobile ? "100%" : "min(360px, calc(100vw - 28px))",
         zIndex: 10050,
         background: "var(--panel)",
@@ -171,10 +171,10 @@ export default function HelpPanel() {
         <div>
           <div style={{ fontWeight: 700, letterSpacing: 0.3, display: "flex", alignItems: "center", gap: 8 }}>
             <RobotIcon size={18} />
-            Geo Assistant
+            AMRT Analyst
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            Gemini 3.1 Pro Preview consultation for interpretation and QA.
+            CC Explorations — Professional AMRT resource analysis.
           </div>
         </div>
         <button
@@ -246,7 +246,7 @@ export default function HelpPanel() {
       >
         {messages.length === 0 && (
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            Ask about anomalies, depth relationships, confidence levels, or recommended next field checks.
+            Ask about magnetic anomalies, radiometric signatures, resource classification, depth correlations, or exploration targets.
           </div>
         )}
 
@@ -277,7 +277,7 @@ export default function HelpPanel() {
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about loaded geological features..."
+          placeholder="Ask about AMRT data, resource signatures, depth models..."
           rows={3}
           style={{
             width: "100%",
