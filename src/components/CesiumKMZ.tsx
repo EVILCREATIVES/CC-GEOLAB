@@ -763,27 +763,32 @@ ${rows.join("")}
         };
 
         const loadKmzBlob = async (blob: Blob, sourceName: string) => {
-          // Wrap as a File with .kmz extension so Cesium detects KMZ format
-          const kmzName = sourceName.replace(/\.(kml|kmz)$/i, "") + "_3d.kmz";
-          const kmzFile = new File([blob], kmzName, { type: "application/vnd.google-earth.kmz" });
-          const blobUrl = URL.createObjectURL(kmzFile);
-          try {
-            ds = await Cesium.KmlDataSource.load(blobUrl, {
-              camera: viewer.scene.camera,
-              canvas: viewer.scene.canvas,
-              clampToGround: false,
-            });
-            viewer.dataSources.add(ds);
-            if (ds.readyPromise) await ds.readyPromise;
-
-            await applyAll();
-            await flyCloserToDataSource(ds);
-            emitSummary(ds, sourceName);
-
-            if (btnLoad) btnLoad.disabled = false;
-          } finally {
-            URL.revokeObjectURL(blobUrl);
+          // Extract KML from the server-returned KMZ using JSZip
+          const JSZipLib = await waitForGlobal("JSZip", 8000);
+          if (JSZipLib) {
+            const ab = await blob.arrayBuffer();
+            const zip = await JSZipLib.loadAsync(ab);
+            const kmlPath = Object.keys(zip.files).find((p: string) => p.toLowerCase().endsWith(".kml")) || "";
+            if (kmlPath) {
+              const kmlText = await zip.file(kmlPath).async("text");
+              const xml = new DOMParser().parseFromString(kmlText, "application/xml");
+              await loadKmlXml(xml, sourceName);
+              return;
+            }
           }
+          // Fallback: let Cesium try loading the blob directly
+          const kmzFile = new File([blob], sourceName.replace(/\.(kml|kmz)$/i, "") + "_3d.kmz", { type: "application/vnd.google-earth.kmz" });
+          ds = await Cesium.KmlDataSource.load(kmzFile, {
+            camera: viewer.scene.camera,
+            canvas: viewer.scene.canvas,
+            clampToGround: false,
+          });
+          viewer.dataSources.add(ds);
+          if (ds.readyPromise) await ds.readyPromise;
+          await applyAll();
+          await flyCloserToDataSource(ds);
+          emitSummary(ds, sourceName);
+          if (btnLoad) btnLoad.disabled = false;
         };
 
         try {
@@ -795,16 +800,20 @@ ${rows.join("")}
 
             let serverOk = false;
             try {
-              const resp = await fetch("/api/convert3d", { method: "POST", body: form });
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 120000); // 2 min max
+              const resp = await fetch("/api/convert3d", { method: "POST", body: form, signal: controller.signal });
+              clearTimeout(timeout);
               if (resp.ok) {
                 const blob = await resp.blob();
+                console.log("[3D Convert] Server returned", blob.size, "bytes");
                 setStatus("Loading 3D data into viewer…");
                 await loadKmzBlob(blob, file.name);
                 setStatus("3D conversion complete ✓");
                 serverOk = true;
               } else {
                 const errBody = await resp.json().catch(() => ({ error: "unknown" }));
-                console.warn("[3D Convert] Server error, falling back to client transform:", errBody.error);
+                console.warn("[3D Convert] Server error:", resp.status, errBody.error);
                 setStatus("Server transform failed – using client fallback…");
               }
             } catch (networkErr) {

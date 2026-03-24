@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { convertKmz, type ConvertOptions } from "@/lib/kmz-converter";
 
 export const maxDuration = 120; // allow long DEM fetches
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
 
     const logs: string[] = [];
     const onProgress = (msg: string) => {
+      console.log("[convert3d]", msg);
       logs.push(msg);
     };
 
