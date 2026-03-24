@@ -763,20 +763,27 @@ ${rows.join("")}
         };
 
         const loadKmzBlob = async (blob: Blob, sourceName: string) => {
-          ds = await Cesium.KmlDataSource.load(blob, {
-            camera: viewer.scene.camera,
-            canvas: viewer.scene.canvas,
-            clampToGround: false,
-            sourceUri: `local:///${sourceName}`,
-          });
-          viewer.dataSources.add(ds);
-          if (ds.readyPromise) await ds.readyPromise;
+          // Wrap as a File with .kmz extension so Cesium detects KMZ format
+          const kmzName = sourceName.replace(/\.(kml|kmz)$/i, "") + "_3d.kmz";
+          const kmzFile = new File([blob], kmzName, { type: "application/vnd.google-earth.kmz" });
+          const blobUrl = URL.createObjectURL(kmzFile);
+          try {
+            ds = await Cesium.KmlDataSource.load(blobUrl, {
+              camera: viewer.scene.camera,
+              canvas: viewer.scene.canvas,
+              clampToGround: false,
+            });
+            viewer.dataSources.add(ds);
+            if (ds.readyPromise) await ds.readyPromise;
 
-          await applyAll();
-          await flyCloserToDataSource(ds);
-          emitSummary(ds, sourceName);
+            await applyAll();
+            await flyCloserToDataSource(ds);
+            emitSummary(ds, sourceName);
 
-          if (btnLoad) btnLoad.disabled = false;
+            if (btnLoad) btnLoad.disabled = false;
+          } finally {
+            URL.revokeObjectURL(blobUrl);
+          }
         };
 
         try {
