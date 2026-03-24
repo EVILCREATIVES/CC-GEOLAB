@@ -762,36 +762,68 @@ ${rows.join("")}
           if (statusEl) statusEl.textContent = msg;
         };
 
+        const loadKmzBlob = async (blob: Blob, sourceName: string) => {
+          ds = await Cesium.KmlDataSource.load(blob, {
+            camera: viewer.scene.camera,
+            canvas: viewer.scene.canvas,
+            clampToGround: false,
+            sourceUri: `local:///${sourceName}`,
+          });
+          viewer.dataSources.add(ds);
+          if (ds.readyPromise) await ds.readyPromise;
+
+          await applyAll();
+          await flyCloserToDataSource(ds);
+          emitSummary(ds, sourceName);
+
+          if (btnLoad) btnLoad.disabled = false;
+        };
+
         try {
-          if (name.endsWith(".kml")) {
-            const txt = await readAsText(file);
-            const txt3d = transformKmlFor3D(txt);
-            const xml = new DOMParser().parseFromString(txt3d, "application/xml");
-            await loadKmlXml(xml, file.name);
-            return;
-          }
+          if (name.endsWith(".kml") || name.endsWith(".kmz")) {
+            // Server-side 3D transform via kmz-converter
+            setStatus("Uploading & converting to 3D (DEM elevations)…");
+            const form = new FormData();
+            form.append("file", file);
 
-          if (name.endsWith(".kmz")) {
-            const JSZip = await waitForGlobal("JSZip", 8000);
-            if (!JSZip) {
-              console.error("[KMZ] JSZip not available");
-              return;
+            let serverOk = false;
+            try {
+              const resp = await fetch("/api/convert3d", { method: "POST", body: form });
+              if (resp.ok) {
+                const blob = await resp.blob();
+                setStatus("Loading 3D data into viewer…");
+                await loadKmzBlob(blob, file.name);
+                setStatus("3D conversion complete ✓");
+                serverOk = true;
+              } else {
+                const errBody = await resp.json().catch(() => ({ error: "unknown" }));
+                console.warn("[3D Convert] Server error, falling back to client transform:", errBody.error);
+                setStatus("Server transform failed – using client fallback…");
+              }
+            } catch (networkErr) {
+              console.warn("[3D Convert] Network error, falling back to client transform:", networkErr);
+              setStatus("Server unreachable – using client fallback…");
             }
 
-            const ab = await readAsArrayBuffer(file);
-            const zip = await JSZip.loadAsync(ab);
-
-            const kmlPath = Object.keys(zip.files).find((p) => p.toLowerCase().endsWith(".kml")) || "";
-
-            if (!kmlPath) {
-              console.error("[KMZ] No .kml found inside KMZ");
-              return;
+            // Fallback: client-side regex transform
+            if (!serverOk) {
+              let kmlText: string;
+              if (name.endsWith(".kmz")) {
+                const JSZipLib = await waitForGlobal("JSZip", 8000);
+                if (!JSZipLib) { console.error("[KMZ] JSZip not available"); return; }
+                const ab = await readAsArrayBuffer(file);
+                const zip = await JSZipLib.loadAsync(ab);
+                const kmlPath = Object.keys(zip.files).find((p: string) => p.toLowerCase().endsWith(".kml")) || "";
+                if (!kmlPath) { console.error("[KMZ] No .kml found inside KMZ"); return; }
+                kmlText = await zip.file(kmlPath).async("text");
+              } else {
+                kmlText = await readAsText(file);
+              }
+              const kml3d = transformKmlFor3D(kmlText);
+              const xml = new DOMParser().parseFromString(kml3d, "application/xml");
+              await loadKmlXml(xml, file.name);
+              setStatus("Loaded (client-side 3D fallback)");
             }
-
-            const kmlText = await zip.file(kmlPath).async("text");
-            const kml3d = transformKmlFor3D(kmlText);
-            const xml = new DOMParser().parseFromString(kml3d, "application/xml");
-            await loadKmlXml(xml, kmlPath);
             return;
           }
 
@@ -811,6 +843,7 @@ ${rows.join("")}
           if (btnLoad) btnLoad.disabled = false;
         } catch (err) {
           console.error("[KMZ] load failed:", err);
+          setStatus("Load failed – see console");
         }
       }
 
