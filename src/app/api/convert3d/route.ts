@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { convertKmz, type ConvertOptions } from "@/lib/kmz-converter";
+import { processKml, unzipKmzToKml, type ConvertOptions } from "@/lib/kmz-converter";
 
 export const maxDuration = 120; // allow long DEM fetches
 export const dynamic = "force-dynamic";
@@ -31,13 +31,18 @@ export async function POST(request: Request) {
       logs.push(msg);
     };
 
-    const { data, outName } = await convertKmz(inputBuf, fileName, opts, onProgress);
+    // Extract KML from KMZ if needed
+    const isKmz = fileName.toLowerCase().endsWith(".kmz");
+    const kmlBytes = isKmz ? await unzipKmzToKml(inputBuf) : inputBuf;
 
-    return new NextResponse(new Uint8Array(data), {
+    // Process KML (DEM elevations, 3D depth structures)
+    const outKml = await processKml(kmlBytes, opts, onProgress);
+
+    // Return processed KML text directly
+    return new NextResponse(outKml.toString("utf-8"), {
       status: 200,
       headers: {
-        "Content-Type": "application/vnd.google-earth.kmz",
-        "Content-Disposition": `attachment; filename="${outName}"`,
+        "Content-Type": "application/vnd.google-earth.kml+xml",
         "X-Convert-Logs": JSON.stringify(logs),
       },
     });

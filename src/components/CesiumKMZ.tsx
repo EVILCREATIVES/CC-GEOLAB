@@ -762,33 +762,10 @@ ${rows.join("")}
           if (statusEl) statusEl.textContent = msg;
         };
 
-        const loadKmzBlob = async (blob: Blob, sourceName: string) => {
-          // Extract KML from the server-returned KMZ using JSZip
-          const JSZipLib = await waitForGlobal("JSZip", 8000);
-          if (JSZipLib) {
-            const ab = await blob.arrayBuffer();
-            const zip = await JSZipLib.loadAsync(ab);
-            const kmlPath = Object.keys(zip.files).find((p: string) => p.toLowerCase().endsWith(".kml")) || "";
-            if (kmlPath) {
-              const kmlText = await zip.file(kmlPath).async("text");
-              const xml = new DOMParser().parseFromString(kmlText, "application/xml");
-              await loadKmlXml(xml, sourceName);
-              return;
-            }
-          }
-          // Fallback: let Cesium try loading the blob directly
-          const kmzFile = new File([blob], sourceName.replace(/\.(kml|kmz)$/i, "") + "_3d.kmz", { type: "application/vnd.google-earth.kmz" });
-          ds = await Cesium.KmlDataSource.load(kmzFile, {
-            camera: viewer.scene.camera,
-            canvas: viewer.scene.canvas,
-            clampToGround: false,
-          });
-          viewer.dataSources.add(ds);
-          if (ds.readyPromise) await ds.readyPromise;
-          await applyAll();
-          await flyCloserToDataSource(ds);
-          emitSummary(ds, sourceName);
-          if (btnLoad) btnLoad.disabled = false;
+        const loadServerKml = async (kmlText: string, sourceName: string) => {
+          // Parse and load the server-processed KML the same way client-side works
+          const xml = new DOMParser().parseFromString(kmlText, "text/xml");
+          await loadKmlXml(xml, sourceName);
         };
 
         try {
@@ -805,10 +782,10 @@ ${rows.join("")}
               const resp = await fetch("/api/convert3d", { method: "POST", body: form, signal: controller.signal });
               clearTimeout(timeout);
               if (resp.ok) {
-                const blob = await resp.blob();
-                console.log("[3D Convert] Server returned", blob.size, "bytes");
+                const kmlText = await resp.text();
+                console.log("[3D Convert] Server returned", kmlText.length, "chars of KML");
                 setStatus("Loading 3D data into viewer…");
-                await loadKmzBlob(blob, file.name);
+                await loadServerKml(kmlText, file.name);
                 setStatus("3D conversion complete ✓");
                 serverOk = true;
               } else {
