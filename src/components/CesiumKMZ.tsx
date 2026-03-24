@@ -764,7 +764,7 @@ ${rows.join("")}
 
         const loadServerKml = async (kmlText: string, sourceName: string) => {
           // Parse and load the server-processed KML the same way client-side works
-          const xml = new DOMParser().parseFromString(kmlText, "text/xml");
+          const xml = new DOMParser().parseFromString(kmlText, "application/xml");
           await loadKmlXml(xml, sourceName);
         };
 
