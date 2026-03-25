@@ -22,9 +22,10 @@ export function getClientInfo(request: NextRequest | Request): { ip: string; reg
     headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     headers.get("x-real-ip") ||
     "unknown";
-  const region =
+  const rawRegion =
     headers.get("x-vercel-ip-city") ||
     headers.get("x-vercel-ip-country") ||
     "";
+  const region = decodeURIComponent(rawRegion);
   return { ip, region };
 }
