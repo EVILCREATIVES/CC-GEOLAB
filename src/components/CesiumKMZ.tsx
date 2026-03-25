@@ -81,9 +81,18 @@ function transformKmlFor3D(kml: string): string {
 
     const baseName = rawName.slice(0, dm.index).replace(/[\s/\\]+$/, "").trim() || "Deposit";
 
+    // Detect commodity from name for coloring
+    const commodityPatterns: [RegExp, string][] = [
+      [/\b(Au|Gold)\b/i, "Gold"], [/\b(Cu|Copper)\b/i, "Copper"],
+      [/\b(Li|Lithium)\b/i, "Lithium"], [/\b(Ag|Silver)\b/i, "Silver"],
+      [/(Oil|Petroleum|Crude)/i, "Oil & Gas"], [/(Ground\s*Water|Water\s*Table)/i, "Ground Water"],
+    ];
+    let commodity = "";
+    for (const [rx, label] of commodityPatterns) { if (rx.test(rawName)) { commodity = label; break; } }
+
     const sm = styleRe.exec(inner);
     const styleTag = sm ? `<styleUrl>${sm[1]}</styleUrl>` : "";
-    const depthData = `<ExtendedData><Data name="_3dDepth"><value>true</value></Data></ExtendedData>`;
+    const depthData = `<ExtendedData><Data name="_3dDepth"><value>true</value></Data><Data name="source"><value>${commodity}</value></Data></ExtendedData>`;
 
     const c = [
       [lon - HALF_LON, lat - HALF_LAT],
@@ -295,6 +304,31 @@ ${rows.join("")}
         Gas: Cesium.Color.fromBytes(110, 168, 163, 255),
         Void: Cesium.Color.fromBytes(123, 225, 52, 255),
       };
+
+      // Map commodity names (from ExtendedData.source) → colors
+      const COMMODITY_COLOR: Record<string, any> = {
+        Copper:           Cesium.Color.fromBytes(184, 115, 51, 255),
+        Gold:             Cesium.Color.fromBytes(255, 215, 0, 255),
+        Silver:           Cesium.Color.fromBytes(192, 192, 192, 255),
+        Lithium:          Cesium.Color.fromBytes(200, 230, 255, 255),
+        "Oil & Gas":      Cesium.Color.fromBytes(40, 40, 40, 255),
+        "Ground Water":   Cesium.Color.fromBytes(74, 134, 255, 255),
+        "Buried Treasure": Cesium.Color.fromBytes(218, 165, 32, 255),
+        "Ship Wrecks":    Cesium.Color.fromBytes(139, 90, 43, 255),
+        Explosives:       Cesium.Color.fromBytes(255, 60, 60, 255),
+        "Ancient Ruins":  Cesium.Color.fromBytes(180, 160, 120, 255),
+      };
+      // Also map folder shorthand to the same
+      COMMODITY_COLOR.Cu = COMMODITY_COLOR.Copper;
+      COMMODITY_COLOR.Au = COMMODITY_COLOR.Gold;
+      COMMODITY_COLOR.Ag = COMMODITY_COLOR.Silver;
+      COMMODITY_COLOR.Li = COMMODITY_COLOR.Lithium;
+      COMMODITY_COLOR.Oil = COMMODITY_COLOR["Oil & Gas"];
+      COMMODITY_COLOR.H2O = COMMODITY_COLOR["Ground Water"];
+      COMMODITY_COLOR.Gas = Cesium.Color.fromBytes(110, 168, 163, 255);
+      COMMODITY_COLOR.Void = Cesium.Color.fromBytes(123, 225, 52, 255);
+
+      const DEPOSIT_ALPHA = 0.35;
       const COLUMN_COLOR = Cesium.Color.MAGENTA.withAlpha(0.92);
 
       let ds: any = null;
@@ -583,6 +617,29 @@ ${rows.join("")}
               // Preserve 3D volume geometry — force per-position heights
               e.polygon.perPositionHeight = true;
               e.polygon.heightReference = Cesium.HeightReference.NONE;
+
+              // Color by commodity with transparency so we can see through
+              let depColor: any = null;
+              try {
+                // Check entity source property, then parent folder name
+                const src = e.properties?.source;
+                const srcVal = src ? String(typeof src.getValue === "function" ? src.getValue() : src) : "";
+                if (srcVal && COMMODITY_COLOR[srcVal]) {
+                  depColor = COMMODITY_COLOR[srcVal];
+                } else {
+                  // Try parent/grandparent folder name
+                  const pName = e.parent?.name || e.parent?.parent?.name || "";
+                  for (const [key, col] of Object.entries(COMMODITY_COLOR)) {
+                    if (pName.includes(key) || new RegExp(`\\b${key}\\b`, "i").test(pName)) {
+                      depColor = col; break;
+                    }
+                  }
+                }
+              } catch { /* ignore */ }
+              if (!depColor) depColor = Cesium.Color.MAGENTA;
+              e.polygon.material = depColor.withAlpha(DEPOSIT_ALPHA);
+              e.polygon.outline = true;
+              e.polygon.outlineColor = depColor.withAlpha(0.8);
               continue;
             }
             const hasExtruded =
