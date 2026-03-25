@@ -200,6 +200,7 @@ export default function CesiumKMZ() {
       viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
       viewer.scene.globe.translucency.enabled = true;
       viewer.scene.globe.translucency.frontFaceAlpha = 0.4;
+      viewer.scene.globe.depthTestAgainstTerrain = false;
 
       setTimeout(() => viewer.resize(), 0);
       window.addEventListener("resize", onResize);
@@ -411,7 +412,37 @@ ${rows.join("")}
             return v && String(typeof v.getValue === "function" ? v.getValue() : v) === "true";
           } catch { return false; }
         };
-        return chk(e) || chk(e?.parent);
+        // Walk up the full parent chain (MultiGeometry can nest 2-3 levels)
+        let node = e;
+        for (let i = 0; i < 5 && node; i++) {
+          if (chk(node)) return true;
+          node = node.parent;
+        }
+        // Also check entity name patterns
+        const n = (e.name || e.parent?.name || "").toLowerCase();
+        return /deposit\s*volume|depth\s*column/i.test(n);
+      }
+
+      // Resolve commodity color by walking up the entity hierarchy
+      function resolveDepositColor(e: any): any {
+        // Walk parent chain looking for source property
+        let node = e;
+        for (let i = 0; i < 5 && node; i++) {
+          try {
+            const src = node.properties?.source;
+            const srcVal = src ? String(typeof src.getValue === "function" ? src.getValue() : src) : "";
+            if (srcVal && COMMODITY_COLOR[srcVal]) return COMMODITY_COLOR[srcVal];
+          } catch { /* skip */ }
+          // Check folder name
+          const fname = node.name || "";
+          for (const [key, col] of Object.entries(COMMODITY_COLOR)) {
+            if (fname === key || new RegExp(`\\b${key}\\b`, "i").test(fname)) return col;
+          }
+          // Also match the folder color keys directly
+          if (FOLDER_COLOR[fname]) return FOLDER_COLOR[fname];
+          node = node.parent;
+        }
+        return null;
       }
 
       function drapePolygonToGround(pg: any, owner?: any) {
@@ -619,24 +650,7 @@ ${rows.join("")}
               e.polygon.heightReference = Cesium.HeightReference.NONE;
 
               // Color by commodity with transparency so we can see through
-              let depColor: any = null;
-              try {
-                // Check entity source property, then parent folder name
-                const src = e.properties?.source;
-                const srcVal = src ? String(typeof src.getValue === "function" ? src.getValue() : src) : "";
-                if (srcVal && COMMODITY_COLOR[srcVal]) {
-                  depColor = COMMODITY_COLOR[srcVal];
-                } else {
-                  // Try parent/grandparent folder name
-                  const pName = e.parent?.name || e.parent?.parent?.name || "";
-                  for (const [key, col] of Object.entries(COMMODITY_COLOR)) {
-                    if (pName.includes(key) || new RegExp(`\\b${key}\\b`, "i").test(pName)) {
-                      depColor = col; break;
-                    }
-                  }
-                }
-              } catch { /* ignore */ }
-              if (!depColor) depColor = Cesium.Color.MAGENTA;
+              const depColor = resolveDepositColor(e) || Cesium.Color.MAGENTA;
               e.polygon.material = depColor.withAlpha(DEPOSIT_ALPHA);
               e.polygon.outline = true;
               e.polygon.outlineColor = depColor.withAlpha(0.8);
