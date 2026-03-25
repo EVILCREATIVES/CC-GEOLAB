@@ -2,8 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import * as React from "react";
-import { useEffect, useRef } from "react";
-import { useGeoData, type GeoEntity, type GeoFileSummary } from "@/context/GeoDataContext";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useGeoData, type GeoEntity, type GeoFileSummary, type UserInfo } from "@/context/GeoDataContext";
 
 function ensureHeadAsset(tag: "link" | "script", attrs: Record<string, string>) {
   const selector = tag === "link" ? `link[href="${attrs.href}"]` : `script[src="${attrs.src}"]`;
@@ -1571,6 +1571,12 @@ ${rows.join("")}
                 </details>
               </td>
             </tr>
+
+            <tr>
+              <td>
+                <AccountSection />
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1617,5 +1623,171 @@ function LegendLine({ label, dashed, under }: { label: string; dashed?: boolean;
       </svg>
       <span>{label}</span>
     </div>
+  );
+}
+
+/* ── Account Section (inline in toolbar) ─────────────────────── */
+
+type HistoryItem = {
+  id: string;
+  fileName: string;
+  blobUrl: string;
+  blobSize: number;
+  createdAt: string;
+};
+
+function AccountSection() {
+  const { user, setUser } = useGeoData();
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [company, setCompany] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [histLoading, setHistLoading] = useState(false);
+
+  const reset = () => {
+    setEmail(""); setPassword(""); setFirstName(""); setLastName(""); setCompany(""); setError("");
+  };
+
+  const handleLogin = async () => {
+    setError(""); setLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Login failed"); return; }
+      setUser(data.user as UserInfo);
+      reset();
+    } catch { setError("Network error"); }
+    finally { setLoading(false); }
+  };
+
+  const handleRegister = async () => {
+    setError(""); setLoading(true);
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, firstName, lastName, company }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Registration failed"); return; }
+      setUser(data.user as UserInfo);
+      reset();
+    } catch { setError("Network error"); }
+    finally { setLoading(false); }
+  };
+
+  const loadHistory = useCallback(async () => {
+    if (!user) return;
+    setHistLoading(true);
+    try {
+      const res = await fetch(`/api/uploads?userId=${encodeURIComponent(user.id)}`);
+      if (res.ok) { const d = await res.json(); setHistory(d.uploads || []); }
+    } catch { /* ignore */ }
+    setHistLoading(false);
+  }, [user]);
+
+  const logout = () => { setUser(null); reset(); setHistory([]); };
+
+  const inputSt: React.CSSProperties = {
+    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(137,168,201,0.2)",
+    borderRadius: 4, color: "#e7eef8", padding: "5px 7px", fontSize: 11,
+    fontFamily: "system-ui", width: "100%", outline: "none",
+  };
+
+  const btnSt: React.CSSProperties = {
+    background: "#2ea8ff", border: "none", borderRadius: 4,
+    color: "#fff", padding: "5px 0", cursor: "pointer", fontSize: 11,
+    fontFamily: "system-ui", width: "100%",
+  };
+
+  return (
+    <details style={{ marginTop: 2 }}>
+      <summary
+        style={{
+          fontSize: 10, color: "#888", textTransform: "uppercase",
+          letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0",
+        }}
+      >
+        👤 Account
+      </summary>
+      <div style={{ paddingTop: 6-0, display: "flex", flexDirection: "column", gap: 6 }}>
+        {user ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 12, color: "#ccc" }}>
+                {user.firstName} {user.lastName}
+              </span>
+              <button onClick={logout} style={{ background: "none", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: "#888", fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>
+                Logout
+              </button>
+            </div>
+
+            {/* Upload history */}
+            <details onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) loadHistory(); }}>
+              <summary style={{ fontSize: 10, color: "#888", cursor: "pointer", userSelect: "none", padding: "2px 0" }}>
+                📁 My Uploads
+              </summary>
+              <div style={{ maxHeight: 160, overflowY: "auto", marginTop: 4 }}>
+                {histLoading && <p style={{ color: "#888", fontSize: 11, margin: 0 }}>Loading…</p>}
+                {!histLoading && !history.length && <p style={{ color: "#888", fontSize: 11, margin: 0 }}>No uploads yet</p>}
+                {history.map((it) => (
+                  <div key={it.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#ccc" }}>{it.fileName}</div>
+                      <div style={{ fontSize: 9, color: "#666" }}>{new Date(it.createdAt).toLocaleDateString()} · {(it.blobSize / 1024).toFixed(0)} KB</div>
+                    </div>
+                    <a href={it.blobUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2ea8ff", fontSize: 12, textDecoration: "none" }}>⬇</a>
+                  </div>
+                ))}
+              </div>
+            </details>
+
+            {/* Admin link */}
+            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
+              🔒 Admin Panel
+            </a>
+          </>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 4, marginBottom: 2 }}>
+              <button onClick={() => { setMode("login"); setError(""); }} style={{ flex: 1, background: mode === "login" ? "#2ea8ff" : "transparent", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: mode === "login" ? "#fff" : "#888", fontSize: 10, padding: "3px 0", cursor: "pointer" }}>Login</button>
+              <button onClick={() => { setMode("register"); setError(""); }} style={{ flex: 1, background: mode === "register" ? "#2ea8ff" : "transparent", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: mode === "register" ? "#fff" : "#888", fontSize: 10, padding: "3px 0", cursor: "pointer" }}>Register</button>
+            </div>
+            {mode === "register" && (
+              <>
+                <input placeholder="First name *" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputSt} />
+                <input placeholder="Last name *" value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputSt} />
+                <input placeholder="Company" value={company} onChange={(e) => setCompany(e.target.value)} style={inputSt} />
+              </>
+            )}
+            <input placeholder="Email *" type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputSt} />
+            <input
+              placeholder="Password *" type="password" value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (mode === "login" ? handleLogin() : handleRegister())}
+              style={inputSt}
+            />
+            <button onClick={mode === "login" ? handleLogin : handleRegister} disabled={loading} style={btnSt}>
+              {loading ? "…" : mode === "login" ? "Login" : "Create Account"}
+            </button>
+            {error && <p style={{ color: "#f66", margin: 0, fontSize: 11 }}>{error}</p>}
+
+            {/* Admin link available even when logged out */}
+            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
+              🔒 Admin Panel
+            </a>
+          </>
+        )}
+      </div>
+    </details>
   );
 }
