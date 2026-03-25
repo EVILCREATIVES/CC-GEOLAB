@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Advanced (registered) users ────────────────────────────────
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  firstName String
+  lastName  String
+  company   String   @default("")
+  password  String   // bcrypt hash
+  createdAt DateTime @default(now())
+  uploads   Upload[]
+}
+
+// ── Uploaded KMZ/KML files ─────────────────────────────────────
+model Upload {
+  id           String   @id @default(cuid())
+  fileName     String
+  blobUrl      String   // Vercel Blob URL
+  blobSize     Int      @default(0)
+  ip           String   @default("")
+  region       String   @default("")
+  userId       String?  // null = anonymous upload
+  user         User?    @relation(fields: [userId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+// ── Access log (every visitor) ─────────────────────────────────
+model AccessLog {
+  id        String   @id @default(cuid())
+  ip        String
+  region    String   @default("")
+  userAgent String   @default("")
+  path      String   @default("/")
+  fileName  String?  // set if they uploaded a file
+  userId    String?  // set if logged-in user
+  createdAt DateTime @default(now())
+}
+
+// ── AI rules (editable by admin) ───────────────────────────────
+model AiRule {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g. "gemini_transform_prompt", "depth_default_unit"
+  label     String   @default("")
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}

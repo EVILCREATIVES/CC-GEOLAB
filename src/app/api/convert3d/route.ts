@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { processKml, unzipKmzToKml, type ConvertOptions } from "@/lib/kmz-converter";
+import { put } from "@vercel/blob";
+import { prisma } from "@/lib/prisma";
+import { getClientInfo } from "@/lib/auth";
 
 export const maxDuration = 120; // allow long DEM fetches
 export const dynamic = "force-dynamic";
@@ -8,6 +11,7 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const userId = (formData.get("userId") as string) || null;
 
     if (!file) {
       return NextResponse.json({ error: "No file provided." }, { status: 400 });
@@ -37,6 +41,23 @@ export async function POST(request: Request) {
 
     // Process KML (DEM elevations, 3D depth structures)
     const outKml = await processKml(kmlBytes, opts, onProgress);
+
+    // Store in Vercel Blob + DB (non-blocking, don't fail the response)
+    const { ip, region } = getClientInfo(request);
+    put(`uploads/${Date.now()}_${fileName}`, file, { access: "public", addRandomSuffix: true })
+      .then((blob) =>
+        prisma.upload.create({
+          data: { fileName, blobUrl: blob.url, blobSize: file.size, ip, region, userId },
+        })
+      )
+      .catch((err) => console.error("[convert3d] blob/db store error:", err));
+
+    // Log access
+    prisma.accessLog
+      .create({
+        data: { ip, region, userAgent: request.headers.get("user-agent") || "", path: "/api/convert3d", fileName, userId },
+      })
+      .catch(() => {});
 
     // Return processed KML text directly
     return new NextResponse(outKml.toString("utf-8"), {

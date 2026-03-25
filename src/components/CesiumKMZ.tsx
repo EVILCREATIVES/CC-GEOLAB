@@ -136,7 +136,7 @@ export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { setSummary } = useGeoData();
+  const { setSummary, user } = useGeoData();
 
   useEffect(() => {
     const rootNode = rootRef.current;
@@ -158,6 +158,13 @@ export default function CesiumKMZ() {
     let viewer: any;
 
     const onResize = () => viewer?.scene && viewer.resize();
+
+    // Log page visit (fire-and-forget)
+    fetch("/api/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/" }),
+    }).catch(() => {});
 
     function initWhenReady() {
       const Cesium = (window as any).Cesium;
@@ -774,6 +781,10 @@ ${rows.join("")}
             setStatus("Uploading & converting to 3D (DEM elevations)…");
             const form = new FormData();
             form.append("file", file);
+            // Attach userId if a registered user is logged in
+            const rootEl = document.getElementById("cesiumContainer")?.parentElement;
+            const uid = rootEl?.dataset?.userId || "";
+            if (uid) form.append("userId", uid);
 
             let serverOk = false;
             try {
@@ -1366,6 +1377,12 @@ ${rows.join("")}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setSummary]);
+
+  // Keep userId in sync on the root element so the inline upload handler can read it
+  useEffect(() => {
+    const el = rootRef.current;
+    if (el) el.dataset.userId = user?.id || "";
+  }, [user]);
 
   return (
     <div ref={rootRef} style={{ width: "100%", height: "100%", position: "relative" }}>

@@ -11,6 +11,8 @@
 # misc
 .DS_Store
 *.pem
+.env
+.env.local
 
 # debug
 npm-debug.log*
@@ -25,6 +27,11 @@ pnpm-debug.log*
 # vercel
 .vercel
 
+# prisma generated client
+src/generated
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
