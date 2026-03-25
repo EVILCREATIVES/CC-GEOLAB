@@ -681,7 +681,7 @@ export async function processKml(
           ];
           const [, , , nmColumn] = derivePrettyNames(pmName);
           const pmVolume = createDepositVolumePm(doc, nmColumn, boxVerts, zMin, zMax, "absolute");
-          attachExtendedData(pmVolume, { ...fields, _3dDeposit: "true" });
+          attachExtendedData(pmVolume, { ...fields, _3dDepth: "true" });
           folder.appendChild(pmVolume);
 
           const parent = placemark.parentNode as Element;
@@ -790,7 +790,7 @@ export async function processKml(
         const botZ = maxLlh[0]?.[2] ?? 0;
         const polyVerts: [number, number][] = surfaceLlh.map(([lon, lat]) => [lon, lat]);
         const volumePm = createDepositVolumePm(doc, `${baseN} deposit volume`, polyVerts, topZ, botZ, "absolute");
-        attachExtendedData(volumePm, { ...meta, _3dDeposit: "true" });
+        attachExtendedData(volumePm, { ...meta, _3dDepth: "true" });
         toInsert.push({ parent, idx: idx + 3, el: volumePm });
       }
       continue;
