@@ -17,6 +17,7 @@ model User {
   password  String   // bcrypt hash
   createdAt DateTime @default(now())
   uploads   Upload[]
+  joystickSettings Json? // per-user joystick settings (null = use preset)
 }
 
 // ── Uploaded KMZ/KML files ─────────────────────────────────────
@@ -49,6 +50,6 @@ model AiRule {
   id        String   @id @default(cuid())
   key       String   @unique // e.g. "gemini_transform_prompt", "depth_default_unit"
   label     String   @default("")
-  value     String   @db.Text
+  value     String   @db.Text // for joystick_preset, value is JSON
   updatedAt DateTime @updatedAt
 }
