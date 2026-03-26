@@ -1114,7 +1114,8 @@ ${rows.join("")}
           }
 
           // Fallback: project ahead from camera position
-          const dist = Math.max(50, Math.abs(carto?.height || 500));
+          // Cap distance to avoid a pivot thousands of meters away when deep underground
+          const dist = Math.min(300, Math.max(50, Math.abs(carto?.height || 500)));
           const ahead = Cesium.Cartesian3.add(
             c.positionWC,
             Cesium.Cartesian3.multiplyByScalar(
@@ -1126,10 +1127,19 @@ ${rows.join("")}
           return ahead;
         }
 
+        function isUnderground() {
+          const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
+          return carto && carto.height < -5;
+        }
+
         function ensureOrbitTarget() {
-          if (!ORBIT.pivot) {
+          // When underground, always refresh the pivot so it doesn't get stale/distant
+          if (!ORBIT.pivot || isUnderground()) {
             ORBIT.pivot = getScreenCenterPivot();
-            ORBIT.range = Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot);
+            ORBIT.range = Math.min(
+              500,
+              Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot)
+            );
           }
         }
 
@@ -1161,7 +1171,8 @@ ${rows.join("")}
 
         function camHeightMeters() {
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          return carto ? Math.abs(carto.height || 0) : 0;
+          // Use actual height (not absolute) so underground scales stay small
+          return carto ? Math.max(1, carto.height || 0) : 1;
         }
 
         function joystickScales() {
@@ -1459,26 +1470,53 @@ ${rows.join("")}
           }
 
           if (state.right.active || state.right.x || state.right.y) {
-            ensureOrbitTarget();
             const x = clampDead(state.right.x);
             const y = clampDead(state.right.y);
 
             if (x || y) {
-              const rot = rotationScaleFromHeight();
-              const rSpeed = js().rotateSpeed ?? 1.0;
-              const YAW_SPEED = 0.008 * rSpeed;
-              const PITCH_SPEED = 0.008 * rSpeed;
+              const underground = isUnderground();
               const invertY = js().invertY ?? false;
+              const adjustedY = invertY ? -y : y;
 
-              const dh = -x * YAW_SPEED * rot;
-              const dp = (invertY ? -y : y) * PITCH_SPEED * rot;
+              // When underground and pushing "up" (y < 0 = Flight Up), move camera
+              // directly upward so the user can always escape underground
+              if (underground && adjustedY < 0) {
+                try {
+                  viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+                } catch { /* noop */ }
+                clearOrbitTarget();
+                const lift = Math.abs(adjustedY) * 60;
+                viewer.camera.moveUp(lift);
+                // Also allow horizontal spin while escaping
+                if (x) {
+                  const rSpeed = js().rotateSpeed ?? 1.0;
+                  const dh = -x * 0.008 * rSpeed;
+                  viewer.camera.setView({
+                    orientation: {
+                      heading: viewer.camera.heading + dh,
+                      pitch: viewer.camera.pitch,
+                      roll: viewer.camera.roll,
+                    },
+                  });
+                }
+                moved = true;
+              } else {
+                ensureOrbitTarget();
+                const rot = rotationScaleFromHeight();
+                const rSpeed = js().rotateSpeed ?? 1.0;
+                const YAW_SPEED = 0.008 * rSpeed;
+                const PITCH_SPEED = 0.008 * rSpeed;
 
-              const c = viewer.camera;
-              const heading = c.heading + dh;
-              const pitch = clampPitch(c.pitch + dp);
+                const dh = -x * YAW_SPEED * rot;
+                const dp = adjustedY * PITCH_SPEED * rot;
 
-              c.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(heading, pitch, ORBIT.range));
-              moved = true;
+                const c = viewer.camera;
+                const heading = c.heading + dh;
+                const pitch = clampPitch(c.pitch + dp);
+
+                c.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(heading, pitch, ORBIT.range));
+                moved = true;
+              }
             }
           }
 
