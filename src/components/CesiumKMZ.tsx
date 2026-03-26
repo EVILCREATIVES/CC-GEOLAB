@@ -106,10 +106,15 @@ function transformKmlFor3D(kml: string): string {
     const topFace = c.map(([lo, la]) => f(lo, la, -topM)).join(" ") + " " + f(c[0][0], c[0][1], -topM);
     const botFace = c.map(([lo, la]) => f(lo, la, -botM)).join(" ") + " " + f(c[0][0], c[0][1], -botM);
 
-    const sides = [[0,1],[1,2],[2,3],[3,0]].map(([i,j]) =>
-      `<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${
+    // Build separate wall Placemarks (one per edge)
+    const wallPms = [[0,1],[1,2],[2,3],[3,0]].map(([i,j], idx) =>
+      `<Placemark>
+<name>${baseName} min depth polygon wall ${idx + 1}</name>
+${depthData}
+<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${
         f(c[i][0],c[i][1],-topM)} ${f(c[j][0],c[j][1],-topM)} ${f(c[j][0],c[j][1],-botM)} ${f(c[i][0],c[i][1],-botM)} ${f(c[i][0],c[i][1],-topM)
-      }</coordinates></LinearRing></outerBoundaryIs></Polygon>`
+      }</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>`
     ).join("\n");
 
     count++;
@@ -127,14 +132,16 @@ ${depthData}
 <Point><altitudeMode>relativeToGround</altitudeMode><coordinates>${lon},${lat},${-botM}</coordinates></Point>
 </Placemark>
 <Placemark>
-<name>${baseName}/ ${dm[1]}-${dm[2]}${uLabel}</name>
+<name>${baseName} min depth polygon</name>
 ${depthData}
-<MultiGeometry>
-<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${topFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
-<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${botFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
-${sides}
-</MultiGeometry>
-</Placemark>`;
+<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${topFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+<Placemark>
+<name>${baseName} max depth polygon</name>
+${depthData}
+<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${botFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+${wallPms}`;
   });
 
   console.log(`[3D Transform] Converted ${count} depth placemarks`);
@@ -418,9 +425,9 @@ ${rows.join("")}
           if (chk(node)) return true;
           node = node.parent;
         }
-        // Also check entity name patterns
+        // Also check entity name patterns (separate Placemark naming convention)
         const n = (e.name || e.parent?.name || "").toLowerCase();
-        return /deposit\s*volume|depth\s*column/i.test(n);
+        return /deposit\s*volume|depth\s*column|min depth polygon|max depth polygon/i.test(n);
       }
 
       // Resolve commodity color by walking up the entity hierarchy

@@ -380,61 +380,70 @@ function createPolygonPm(doc: Document, name: string, outerLlh: Coord3[], holesL
  *
  * Produces: 1 top face + 1 bottom face + N side quads.
  */
-function buildPolygonFace(doc: Document, ring: Coord3[], altMode: string): Element {
-  const poly = kmlEl(doc, "Polygon");
-  poly.appendChild(kmlEl(doc, "altitudeMode", altMode));
-  const outer = kmlEl(doc, "outerBoundaryIs");
-  const lr = kmlEl(doc, "LinearRing");
-  lr.appendChild(kmlEl(doc, "coordinates", formatCoords(ring)));
-  outer.appendChild(lr);
-  poly.appendChild(outer);
-  return poly;
-}
-
-function createDepositVolumePm(
+/**
+ * Create separate Placemarks for a 3D deposit volume:
+ * - 1 top face  ("<name> min depth polygon")
+ * - 1 bottom face ("<name> max depth polygon")
+ * - N wall quads  ("<name> min depth polygon wall 1..N")
+ *
+ * Each is a standalone Placemark (NOT MultiGeometry) so Cesium
+ * correctly preserves per-vertex absolute altitudes.
+ */
+function createDepositVolumePlacemarks(
   doc: Document,
   name: string,
-  vertices2D: [number, number][],
-  topAlt: number,
-  bottomAlt: number,
+  topRing: Coord3[],
+  bottomRing: Coord3[],
   altMode = "absolute"
-): Element {
-  const pm = kmlEl(doc, "Placemark");
-  pm.appendChild(kmlEl(doc, "name", name));
-  const mg = kmlEl(doc, "MultiGeometry");
+): Element[] {
+  const out: Element[] = [];
 
-  // Ensure the ring is closed
-  const verts = [...vertices2D];
-  const first = verts[0];
-  const last = verts[verts.length - 1];
-  if (first[0] !== last[0] || first[1] !== last[1]) {
-    verts.push([first[0], first[1]]);
+  // Ensure rings are closed
+  function ensureClosed(ring: Coord3[]): Coord3[] {
+    const r = [...ring];
+    const f = r[0], l = r[r.length - 1];
+    if (f[0] !== l[0] || f[1] !== l[1]) r.push([f[0], f[1], f[2]]);
+    return r;
+  }
+  const top = ensureClosed(topRing);
+  const bot = ensureClosed(bottomRing);
+
+  // Helper: create a single Polygon Placemark
+  function polyPm(pmName: string, ring: Coord3[]): Element {
+    const pm = kmlEl(doc, "Placemark");
+    pm.appendChild(kmlEl(doc, "name", pmName));
+    const poly = kmlEl(doc, "Polygon");
+    poly.appendChild(kmlEl(doc, "tessellate", "0"));
+    poly.appendChild(kmlEl(doc, "extrude", "0"));
+    poly.appendChild(kmlEl(doc, "altitudeMode", altMode));
+    const outer = kmlEl(doc, "outerBoundaryIs");
+    const lr = kmlEl(doc, "LinearRing");
+    lr.appendChild(kmlEl(doc, "coordinates", formatCoords(ring)));
+    outer.appendChild(lr);
+    poly.appendChild(outer);
+    pm.appendChild(poly);
+    return pm;
   }
 
-  // Top face
-  const topRing: Coord3[] = verts.map(([lon, lat]) => [lon, lat, topAlt]);
-  mg.appendChild(buildPolygonFace(doc, topRing, altMode));
+  // Top face (min depth = shallower = higher altitude)
+  out.push(polyPm(`${name} min depth polygon`, top));
 
-  // Bottom face
-  const bottomRing: Coord3[] = verts.map(([lon, lat]) => [lon, lat, bottomAlt]);
-  mg.appendChild(buildPolygonFace(doc, bottomRing, altMode));
+  // Bottom face (max depth = deeper = lower altitude)
+  out.push(polyPm(`${name} max depth polygon`, bot));
 
-  // Side faces (one quad per edge, N edges for N+1 closed-ring vertices)
-  for (let i = 0; i < verts.length - 1; i++) {
-    const [lon1, lat1] = verts[i];
-    const [lon2, lat2] = verts[i + 1];
-    const sideRing: Coord3[] = [
-      [lon1, lat1, topAlt],
-      [lon2, lat2, topAlt],
-      [lon2, lat2, bottomAlt],
-      [lon1, lat1, bottomAlt],
-      [lon1, lat1, topAlt], // close
+  // Side walls — one quad per edge
+  for (let i = 0; i < top.length - 1; i++) {
+    const wallRing: Coord3[] = [
+      [top[i][0], top[i][1], top[i][2]],
+      [top[i + 1][0], top[i + 1][1], top[i + 1][2]],
+      [bot[i + 1][0], bot[i + 1][1], bot[i + 1][2]],
+      [bot[i][0], bot[i][1], bot[i][2]],
+      [top[i][0], top[i][1], top[i][2]], // close
     ];
-    mg.appendChild(buildPolygonFace(doc, sideRing, altMode));
+    out.push(polyPm(`${name} min depth polygon wall ${i + 1}`, wallRing));
   }
 
-  pm.appendChild(mg);
-  return pm;
+  return out;
 }
 
 // ── Survey area clamping ───────────────────────────────────────
@@ -680,9 +689,14 @@ export async function processKml(
             [lon - LON_OFF, lat + LAT_OFF],
           ];
           const [, , , nmColumn] = derivePrettyNames(pmName);
-          const pmVolume = createDepositVolumePm(doc, nmColumn, boxVerts, zMin, zMax, "absolute");
-          attachExtendedData(pmVolume, { ...fields, _3dDepth: "true" });
-          folder.appendChild(pmVolume);
+          // Per-vertex heights for the box (all same DEM at this single point)
+          const boxTop: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMin]);
+          const boxBot: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMax]);
+          const volumePms = createDepositVolumePlacemarks(doc, nmColumn, boxTop, boxBot, "absolute");
+          for (const vp of volumePms) {
+            attachExtendedData(vp, { ...fields, _3dDepth: "true" });
+            folder.appendChild(vp);
+          }
 
           const parent = placemark.parentNode as Element;
           const siblings = Array.from(parent.childNodes);
@@ -772,7 +786,7 @@ export async function processKml(
       continue;
     }
 
-    // POLYGON (deposit): 3D closed volume + min/max lines
+    // POLYGON (deposit): 3D closed volume as separate Placemarks + min/max lines
     if (hasPoly && (isDeposit(pmName) || shouldSkipVolume(pmName))) {
       const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
       const baseN = cleanBase(pmName);
@@ -784,14 +798,15 @@ export async function processKml(
       toInsert.push({ parent, idx: idx + 1, el: pmMin });
       toInsert.push({ parent, idx: idx + 2, el: pmMax });
 
-      // Build 3D closed volume from the polygon ring
+      // Build 3D closed volume as separate Placemarks (not MultiGeometry)
       if (!shouldSkipVolume(pmName)) {
-        const topZ = minLlh[0]?.[2] ?? 0;
-        const botZ = maxLlh[0]?.[2] ?? 0;
-        const polyVerts: [number, number][] = surfaceLlh.map(([lon, lat]) => [lon, lat]);
-        const volumePm = createDepositVolumePm(doc, `${baseN} deposit volume`, polyVerts, topZ, botZ, "absolute");
-        attachExtendedData(volumePm, { ...meta, _3dDepth: "true" });
-        toInsert.push({ parent, idx: idx + 3, el: volumePm });
+        const volumePms = createDepositVolumePlacemarks(doc, baseN, minLlh, maxLlh, "absolute");
+        let offset = 3;
+        for (const vp of volumePms) {
+          attachExtendedData(vp, { ...meta, _3dDepth: "true" });
+          toInsert.push({ parent, idx: idx + offset, el: vp });
+          offset++;
+        }
       }
       continue;
     }
