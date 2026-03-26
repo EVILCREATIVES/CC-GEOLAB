@@ -162,6 +162,14 @@ function isDeposit(name: string): boolean {
   return /\bdeposit\b/i.test(name || "");
 }
 
+/** Any polygon that represents a resource zone (deposit, anomaly, zone, etc.) */
+function isResourcePolygon(name: string): boolean {
+  if (!name) return false;
+  // Match "Deposit", commodity names, or common resource polygon naming patterns
+  return /\b(deposit|zone|anomaly|area|field|reservoir|aquifer|vein|lode|seam|bed|pocket|lens|body|ore\s*body)\b/i.test(name)
+    || whichCommodity(name) !== null;
+}
+
 function shouldSkipVolume(name: string): boolean {
   return /(verify\s*png|png\s*depth\s*volume)/i.test(name || "");
 }
@@ -786,8 +794,8 @@ export async function processKml(
       continue;
     }
 
-    // POLYGON (deposit): 3D closed volume as separate Placemarks + min/max lines
-    if (hasPoly && (isDeposit(pmName) || shouldSkipVolume(pmName))) {
+    // POLYGON (resource/deposit): 3D closed volume as separate Placemarks + min/max lines
+    if (hasPoly && (isResourcePolygon(pmName) || isDeposit(pmName) || shouldSkipVolume(pmName))) {
       const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
       const baseN = cleanBase(pmName);
       const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
