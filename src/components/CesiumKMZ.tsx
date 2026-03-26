@@ -1168,6 +1168,7 @@ ${rows.join("")}
         function hook(stick: any, which: "left" | "right") {
           const { pad, knob } = stick;
           let snapBackId: number | null = null;
+          let activePointerId: number | null = null;
 
           const center = () => {
             knob.style.left = `${PAD / 2 - KN / 2}px`;
@@ -1218,11 +1219,20 @@ ${rows.join("")}
                 state[which].y = 0;
                 center();
                 stopSnapBack();
+                if (which === "right") resetOrbitState();
               }
             }, 16);
           };
 
+          const forceRelease = () => {
+            activePointerId = null;
+            state[which].active = false;
+            startSnapBack();
+          };
+
           function start(e: any) {
+            if (activePointerId != null) return;
+            activePointerId = e.pointerId ?? null;
             state[which].active = true;
             stopSnapBack();
             e.stopPropagation?.();
@@ -1239,6 +1249,7 @@ ${rows.join("")}
 
           function move(e: any) {
             if (!state[which].active) return;
+            if (e.pointerId != null && activePointerId != null && e.pointerId !== activePointerId) return;
             e.stopPropagation?.();
             const p = local(e);
             const c = clamp(p.x, p.y);
@@ -1248,28 +1259,36 @@ ${rows.join("")}
             e.preventDefault();
           }
 
-          function end() {
+          function end(e?: any) {
+            if (e?.pointerId != null && activePointerId != null && e.pointerId !== activePointerId) return;
+            activePointerId = null;
             state[which].active = false;
             startSnapBack();
           }
 
           pad.addEventListener("pointerdown", start);
+          pad.addEventListener("lostpointercapture", () => forceRelease());
           window.addEventListener("pointermove", move);
           window.addEventListener("pointerup", end);
           window.addEventListener("pointercancel", end);
 
-          pad.addEventListener("touchstart", start, {
-            passive: false,
-          });
+          pad.addEventListener("touchstart", (e: any) => {
+            if (state[which].active) return;
+            start(e);
+          }, { passive: false });
           window.addEventListener("touchmove", move, {
             passive: false,
           });
-          window.addEventListener("touchend", end);
-          window.addEventListener("touchcancel", end);
+          window.addEventListener("touchend", () => {
+            if (activePointerId == null) end();
+          });
+          window.addEventListener("touchcancel", () => {
+            if (activePointerId == null) end();
+          });
 
-          window.addEventListener("blur", end);
+          window.addEventListener("blur", () => forceRelease());
           document.addEventListener("visibilitychange", () => {
-            if (document.hidden) end();
+            if (document.hidden) forceRelease();
           });
         }
 
@@ -1310,6 +1329,7 @@ ${rows.join("")}
               state.right.active = false;
               state.right.x = 0;
               state.right.y = 0;
+              resetOrbitState();
             }
             dragging = null;
           };
