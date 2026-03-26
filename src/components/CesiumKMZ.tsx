@@ -1101,22 +1101,29 @@ ${rows.join("")}
         function getScreenCenterPivot() {
           const s = viewer.scene;
           const c = viewer.camera;
-          const center = new Cesium.Cartesian2(s.drawingBufferWidth / 2, s.drawingBufferHeight / 2);
-          const ray = c.getPickRay(center);
-          let hit = Cesium.defined(ray) ? s.globe.pick(ray, s) : null;
-          if (!hit) {
-            const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(c.positionWC);
-            const ahead = Cesium.Cartesian3.add(
-              c.positionWC,
-              Cesium.Cartesian3.multiplyByScalar(
-                Cesium.Cartesian3.normalize(c.directionWC, new Cesium.Cartesian3()),
-                Math.max(50, carto?.height || 500),
-              ),
-              new Cesium.Cartesian3(),
-            );
-            hit = ahead;
+          const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(c.positionWC);
+          const isUnderground = carto && carto.height < 0;
+
+          // When underground, globe.pick won't work reliably — use a point
+          // ahead of the camera at a reasonable distance
+          if (!isUnderground) {
+            const center = new Cesium.Cartesian2(s.drawingBufferWidth / 2, s.drawingBufferHeight / 2);
+            const ray = c.getPickRay(center);
+            const hit = Cesium.defined(ray) ? s.globe.pick(ray, s) : null;
+            if (hit) return hit;
           }
-          return hit;
+
+          // Fallback: project ahead from camera position
+          const dist = Math.max(50, Math.abs(carto?.height || 500));
+          const ahead = Cesium.Cartesian3.add(
+            c.positionWC,
+            Cesium.Cartesian3.multiplyByScalar(
+              Cesium.Cartesian3.normalize(c.directionWC, new Cesium.Cartesian3()),
+              dist,
+            ),
+            new Cesium.Cartesian3(),
+          );
+          return ahead;
         }
 
         function ensureOrbitTarget() {
@@ -1148,20 +1155,20 @@ ${rows.join("")}
 
         function rotationScaleFromHeight() {
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          const h = Math.max(1, carto ? Math.max(carto.height || 0, 0) : 0);
+          const h = Math.max(1, carto ? Math.abs(carto.height || 0) : 0);
           return Cesium.Math.clamp(1 / Math.pow(h / 1200, 0.55), 0.18, 1.8);
         }
 
         function camHeightMeters() {
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          return carto ? Math.max(0, carto.height || 0) : 0;
+          return carto ? Math.abs(carto.height || 0) : 0;
         }
 
         function joystickScales() {
-          const h = camHeightMeters();
+          const h = Math.max(1, camHeightMeters());
           const hk = Math.max(1, h / 1000);
           const moveScale = Cesium.Math.clamp(hk, 0.2, 200);
-          const zoomStep = Cesium.Math.clamp(h * 0.02, 2, 5000);
+          const zoomStep = Cesium.Math.clamp(h * 0.02, 5, 5000);
           return { moveScale, zoomStep };
         }
 
