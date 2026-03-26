@@ -10,6 +10,7 @@ type Message = {
 
 const starterPrompts = [
   "What is AMRT and how does it detect subsurface resources?",
+  "How do I use this platform? Walk me through the controls.",
   "Analyze the loaded data and rank targets by discovery confidence.",
   "What do the depth ranges and signatures suggest for drill validation?",
 ];
@@ -246,7 +247,7 @@ export default function HelpPanel() {
       >
         {messages.length === 0 && (
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, or exploration targets.
+            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, exploration targets, or how to use this platform.
           </div>
         )}
 
@@ -277,7 +278,7 @@ export default function HelpPanel() {
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about AMRT analysis, subsurface targets, depth models..."
+          placeholder="Ask about AMRT analysis, platform features, controls..."
           rows={3}
           style={{
             width: "100%",
