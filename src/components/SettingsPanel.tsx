@@ -17,7 +17,7 @@ export interface JoystickSettings {
   mouseSensitivity: number;
 }
 
-const DEFAULTS: JoystickSettings = {
+export const DEFAULTS: JoystickSettings = {
   moveSpeed: 1.0,
   zoomSpeed: 1.0,
   rotateSpeed: 1.0,

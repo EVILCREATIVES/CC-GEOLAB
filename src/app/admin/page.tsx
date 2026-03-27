@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import AdminJoystickPresetPanel from "@/components/AdminJoystickPresetPanel";
 
 type Tab = "logs" | "users" | "rules" | "joystick";
 
@@ -44,6 +45,8 @@ export default function AdminPage() {
     );
   }
 
+
+
   return (
     <div style={styles.page}>
       <div style={styles.container}>
@@ -75,7 +78,6 @@ export default function AdminPage() {
       </div>
     </div>
   );
-import AdminJoystickPresetPanel from "@/components/AdminJoystickPresetPanel";
 }
 
 type LogEntry = { id: string; createdAt: string; ip: string; region: string; path: string; fileName: string | null; userId: string | null };
