@@ -1093,9 +1093,11 @@ ${rows.join("")}
         const getDamp = () => js().damping ?? BASE_DAMP;
         const clampDead = (v: number) => (Math.abs(v) < getDead() ? 0 : v);
 
-        const ORBIT: { pivot: any; range: number } = {
+        const ORBIT: { pivot: any; range: number; heading: number; pitch: number } = {
           pivot: null,
           range: 1000,
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-30),
         };
 
         function getScreenCenterPivot() {
@@ -1140,6 +1142,8 @@ ${rows.join("")}
               500,
               Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot)
             );
+            ORBIT.heading = viewer.camera.heading;
+            ORBIT.pitch = viewer.camera.pitch;
           }
         }
 
@@ -1510,11 +1514,10 @@ ${rows.join("")}
                 const dh = -x * YAW_SPEED * rot;
                 const dp = adjustedY * PITCH_SPEED * rot;
 
-                const c = viewer.camera;
-                const heading = c.heading + dh;
-                const pitch = clampPitch(c.pitch + dp);
+                ORBIT.heading = ORBIT.heading + dh;
+                ORBIT.pitch = clampPitch(ORBIT.pitch + dp);
 
-                c.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(heading, pitch, ORBIT.range));
+                viewer.camera.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(ORBIT.heading, ORBIT.pitch, ORBIT.range));
                 moved = true;
               }
             }

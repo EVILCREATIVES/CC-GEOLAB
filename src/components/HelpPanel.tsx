@@ -11,8 +11,7 @@ type Message = {
 const starterPrompts = [
   "What is AMRT and how does it detect subsurface resources?",
   "How do I use this platform? Walk me through the controls.",
-  "Analyze the loaded data and rank targets by discovery confidence.",
-  "What do the depth ranges and signatures suggest for drill validation?",
+  "Analyze the loaded data and rank targets by confidence.",
 ];
 
 function RobotIcon({ size = 24 }: { size?: number }) {
@@ -211,8 +210,8 @@ export default function HelpPanel() {
         style={{
           padding: "10px 12px",
           display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
+          flexDirection: "column",
+          gap: 6,
           borderBottom: "1px solid var(--line)",
         }}
       >
@@ -224,12 +223,14 @@ export default function HelpPanel() {
             disabled={loading}
             style={{
               border: "1px solid var(--line)",
-              borderRadius: 999,
+              borderRadius: 6,
               background: "rgba(33, 56, 87, 0.55)",
               color: "var(--text)",
               cursor: loading ? "not-allowed" : "pointer",
               fontSize: 11,
-              padding: "5px 10px",
+              padding: "6px 10px",
+              textAlign: "left",
+              width: "100%",
             }}
           >
             {prompt}
