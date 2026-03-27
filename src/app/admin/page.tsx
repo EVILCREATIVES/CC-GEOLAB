@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-type Tab = "logs" | "users" | "rules";
+type Tab = "logs" | "users" | "rules" | "joystick";
 
 export default function AdminPage() {
   const [password, setPassword] = useState("");
@@ -52,22 +52,30 @@ export default function AdminPage() {
           <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
         </div>
         <div style={styles.tabs}>
-          {(["logs", "users", "rules"] as Tab[]).map((t) => (
+          {(["logs", "users", "rules", "joystick"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}
             >
-              {t === "logs" ? "Access Logs" : t === "users" ? "Registered Users" : "AI Rules"}
+              {t === "logs"
+                ? "Access Logs"
+                : t === "users"
+                ? "Registered Users"
+                : t === "rules"
+                ? "AI Rules"
+                : "Joystick Preset"}
             </button>
           ))}
         </div>
         {tab === "logs" && <LogsTab token={token} />}
         {tab === "users" && <UsersTab token={token} />}
         {tab === "rules" && <RulesTab token={token} />}
+        {tab === "joystick" && <AdminJoystickPresetPanel />}
       </div>
     </div>
   );
+import AdminJoystickPresetPanel from "@/components/AdminJoystickPresetPanel";
 }
 
 type LogEntry = { id: string; createdAt: string; ip: string; region: string; path: string; fileName: string | null; userId: string | null };
