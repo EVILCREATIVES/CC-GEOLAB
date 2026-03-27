@@ -196,6 +196,10 @@ export default function HelpPanel() {
         </button>
       </div>
 
+      {/* Disclaimer: AI analysis notice */}
+      <div style={{ background: "#222", color: "#ffb347", fontSize: 12, padding: "8px 12px", borderRadius: 8, margin: "8px 0", border: "1px solid #444", textAlign: "center" }}>
+        <strong>Disclaimer:</strong> All analyses and answers are AI-generated and may contain errors or inaccuracies. Always verify results with a qualified expert before making decisions.
+      </div>
       {summary && (
         <div style={{ padding: "6px 14px", borderBottom: "1px solid var(--line)", fontSize: 11, color: "var(--accent)", display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
