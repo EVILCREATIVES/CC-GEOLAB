@@ -83,6 +83,9 @@ export function extractDepthRange(name: string, defaultUnit = "m"): [number, num
   if (!name) return null;
   const s = name.trim();
 
+  // Reject DMS coordinate strings — contain ° (degree sign) with ' and/or "
+  if (/°/.test(s)) return null;
+
   // Pattern A: dual slash-separated ranges — "F1a/ 4426-4474/ 5364-5379'"
   // Returns the envelope (outermost bounds) of both ranges
   const dualMatch = s.match(
@@ -118,8 +121,9 @@ export function extractDepthRange(name: string, defaultUnit = "m"): [number, num
   }
 
   // Pattern E: bare trailing number (only when commodity detected) — "Au3e 41"
+  // Reject structural labels where trailing number is an ID, not depth
   m = s.match(/\s(\d+(?:\.\d+)?)\s*$/);
-  if (m && whichCommodity(s)) {
+  if (m && whichCommodity(s) && !/\b(?:vein|fault|deposit|zone|area|site|line|survey)\s+\d/i.test(s)) {
     const v = toMeters(parseFloat(m[1]), null, defaultUnit);
     return [v, v];
   }
@@ -331,7 +335,7 @@ function getTextContent(el: Element, childTag: string): string {
 }
 
 function setAltitudeMode(elem: Element, mode: string) {
-  const resolved = mode === "clampToGround" ? "absolute" : mode;
+  const resolved = mode === "clampToGround" ? "relativeToGround" : mode;
   // remove gx:altitudeMode
   for (const gx of findKml(elem, ".//gx:altitudeMode")) {
     gx.parentNode?.removeChild(gx);
@@ -506,30 +510,24 @@ function clampSurveyArea(placemark: Element) {
         const coords = parseCoords(coordsEl.textContent || "");
         coordsEl.textContent = coords.map(([lon, lat]) => `${lon.toFixed(8)},${lat.toFixed(8)},0.000`).join(" ");
       }
-      setAltitudeMode(ge, "absolute");
+      setAltitudeMode(ge, "relativeToGround");
     }
   }
 }
 
 // ── Inject altitudes into coordinate text ──────────────────────
+// Original KML geometries are placed ON the terrain (altitude 0, relativeToGround).
 function injectAltitudes(
   text: string,
-  fetchElev: (lon: number, lat: number) => number,
-  offsetM: number,
-  datumOffsetM: number,
-  mode: string
+  _fetchElev: (lon: number, lat: number) => number,
+  _offsetM: number,
+  _datumOffsetM: number,
+  _mode: string
 ): string {
   const coords = parseCoords(text);
   if (!coords.length) return text;
-  if (mode === "clampToGround") {
-    return coords.map(([lon, lat]) => `${lon.toFixed(8)},${lat.toFixed(8)},0.000`).join(" ");
-  }
-  const out: Coord3[] = [];
-  for (const [lon, lat] of coords) {
-    const e = fetchElev(lon, lat);
-    out.push([lon, lat, e + datumOffsetM + offsetM]);
-  }
-  return formatCoords(out);
+  // All original geometries sit on the ground surface
+  return coords.map(([lon, lat]) => `${lon.toFixed(8)},${lat.toFixed(8)},0.000`).join(" ");
 }
 
 // ── Nearest depth lookup ───────────────────────────────────────
@@ -547,11 +545,11 @@ function ringToMinMaxLines(
   const minLlh: Coord3[] = [];
   const maxLlh: Coord3[] = [];
   let mnAny = 0, mxAny = 0;
-  for (const [lon, lat, E] of surfaceLlh) {
+  for (const [lon, lat] of surfaceLlh) {
     const nd = nearestDepths(lon, lat);
     const [mnM, mxM] = nd ? [nd[1], nd[2]] : [0, 0];
-    minLlh.push([lon, lat, E - Math.abs(mnM)]);
-    maxLlh.push([lon, lat, E - Math.abs(mxM)]);
+    minLlh.push([lon, lat, -Math.abs(mnM)]);
+    maxLlh.push([lon, lat, -Math.abs(mxM)]);
     mnAny = Math.abs(mnM);
     mxAny = Math.abs(mxM);
   }
@@ -688,13 +686,13 @@ export async function processKml(
       }
     }
 
-    // Inject altitudes into all coords
+    // Inject altitudes into all coords — place original geometries on terrain
     const coordNodes = findKml(placemark, ".//kml:Point/kml:coordinates | .//kml:LineString/kml:coordinates | .//kml:LinearRing/kml:coordinates");
     for (const node of coordNodes) {
       const geom = node.parentNode as Element;
       const parentGeom = geom?.parentNode as Element;
       node.textContent = injectAltitudes(node.textContent || "", fetchElev, offsetM, datumOffsetM, mode);
-      setAltitudeMode(parentGeom || geom, mode);
+      setAltitudeMode(parentGeom || geom, "relativeToGround");
     }
 
     // Generate 3D structures from depth-encoded points
@@ -706,11 +704,6 @@ export async function processKml(
         if (coords.length) {
           const [lon, lat] = coords[0];
           const [minM, maxM] = rng;
-          const e = fetchElev(lon, lat);
-          const E = e + datumOffsetM + offsetM;
-          const zSurface = E;
-          const zMin = E - Math.abs(minM);
-          const zMax = E - Math.abs(maxM);
 
           const [nmSurface, nmMin, nmMax] = derivePrettyNames(pmName);
           const comm = whichCommodity(pmName) || whichCommodityFromAncestors(placemark) || "";
@@ -718,15 +711,12 @@ export async function processKml(
           const folder = kmlEl(doc, "Folder");
           folder.appendChild(kmlEl(doc, "name", `${pmName} – 3D Depths`));
 
-          const pmSurface = createPointPm(doc, nmSurface, lon, lat, zSurface, "absolute");
-          const pmMin = createPointPm(doc, nmMin, lon, lat, zMin, "absolute");
-          const pmMax = createPointPm(doc, nmMax, lon, lat, zMax, "absolute");
+          const pmSurface = createPointPm(doc, nmSurface, lon, lat, 0, "relativeToGround");
+          const pmMin = createPointPm(doc, nmMin, lon, lat, -Math.abs(minM), "relativeToGround");
+          const pmMax = createPointPm(doc, nmMax, lon, lat, -Math.abs(maxM), "relativeToGround");
 
           const fields = {
             source: comm || "",
-            surfaceZ_m: zSurface.toFixed(3),
-            minZ_m: zMin.toFixed(3),
-            maxZ_m: zMax.toFixed(3),
             minDepth_m: Math.abs(minM).toFixed(3),
             maxDepth_m: Math.abs(maxM).toFixed(3),
           };
@@ -746,10 +736,10 @@ export async function processKml(
             [lon - LON_OFF, lat + LAT_OFF],
           ];
           const [, , , nmColumn] = derivePrettyNames(pmName);
-          // Per-vertex heights for the box (all same DEM at this single point)
-          const boxTop: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMin]);
-          const boxBot: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMax]);
-          const volumePms = createDepositVolumePlacemarks(doc, nmColumn, boxTop, boxBot, "absolute");
+          // Per-vertex heights for the box (relative to ground)
+          const boxTop: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, -Math.abs(minM)]);
+          const boxBot: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, -Math.abs(maxM)]);
+          const volumePms = createDepositVolumePlacemarks(doc, nmColumn, boxTop, boxBot, "relativeToGround");
           for (const vp of volumePms) {
             attachExtendedData(vp, { ...fields, _3dDepth: "true" });
             folder.appendChild(vp);
@@ -835,8 +825,8 @@ export async function processKml(
       // Skip if no actual depth data is available (would produce identical surface-level lines)
       if (mnAny === 0 && mxAny === 0) continue;
       const baseN = cleanBase(pmName);
-      const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
-      const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
+      const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh, "relativeToGround");
+      const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh, "relativeToGround");
       const meta = { source: commFinal, minDepth_m: mnAny.toFixed(3), maxDepth_m: mxAny.toFixed(3) };
       attachExtendedData(pmMin, meta);
       attachExtendedData(pmMax, meta);
@@ -852,8 +842,8 @@ export async function processKml(
       let minLlh: Coord3[], maxLlh: Coord3[], mnAny: number, mxAny: number;
       if (selfRange) {
         [mnAny, mxAny] = [selfRange[0], selfRange[1]];
-        minLlh = surfaceLlh.map(([lon, lat, E]) => [lon, lat, E - mnAny] as Coord3);
-        maxLlh = surfaceLlh.map(([lon, lat, E]) => [lon, lat, E - mxAny] as Coord3);
+        minLlh = surfaceLlh.map(([lon, lat]) => [lon, lat, -mnAny] as Coord3);
+        maxLlh = surfaceLlh.map(([lon, lat]) => [lon, lat, -mxAny] as Coord3);
       } else {
         ({ minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths));
       }
@@ -863,8 +853,8 @@ export async function processKml(
       if (mnAny === 0 && mxAny === 0) continue;
 
       const baseN = cleanBase(pmName);
-      const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
-      const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
+      const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh, "relativeToGround");
+      const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh, "relativeToGround");
       const meta = { source: commFinal, minDepth_m: mnAny.toFixed(3), maxDepth_m: mxAny.toFixed(3) };
       attachExtendedData(pmMin, meta);
       attachExtendedData(pmMax, meta);
@@ -873,7 +863,7 @@ export async function processKml(
 
       // Build 3D closed volume as separate Placemarks (not MultiGeometry)
       if (!shouldSkipVolume(pmName)) {
-        const volumePms = createDepositVolumePlacemarks(doc, baseN, minLlh, maxLlh, "absolute");
+        const volumePms = createDepositVolumePlacemarks(doc, baseN, minLlh, maxLlh, "relativeToGround");
         let offset = 3;
         for (const vp of volumePms) {
           attachExtendedData(vp, { ...meta, _3dDepth: "true" });
@@ -889,15 +879,11 @@ export async function processKml(
       if (!generateVolumePolygons) continue;
       const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
       const baseN = cleanBase(pmName);
-      const zMin = minLlh[0]?.[2] ?? 0;
-      const zMax = maxLlh[0]?.[2] ?? 0;
 
-      const pmMinPoly = createPolygonPm(doc, `${baseN} min depth polygon`, minLlh, holesLlh);
-      const pmMaxPoly = createPolygonPm(doc, `${baseN} max depth polygon`, maxLlh, holesLlh);
+      const pmMinPoly = createPolygonPm(doc, `${baseN} min depth polygon`, minLlh, holesLlh, "relativeToGround");
+      const pmMaxPoly = createPolygonPm(doc, `${baseN} max depth polygon`, maxLlh, holesLlh, "relativeToGround");
       const meta = {
         source: commFinal,
-        minZ_m: zMin.toFixed(3),
-        maxZ_m: zMax.toFixed(3),
         minDepth_m: mnAny.toFixed(3),
         maxDepth_m: mxAny.toFixed(3),
       };

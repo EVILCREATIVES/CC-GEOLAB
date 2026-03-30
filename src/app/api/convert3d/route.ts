@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const inputBuf = Buffer.from(arrayBuffer);
 
     const opts: ConvertOptions = {
-      mode: "absolute",
+      mode: "relativeToGround",
       offsetM: 0,
       datumOffsetM: 0,
       useDepthFromNames: true,
@@ -39,8 +39,8 @@ export async function POST(request: Request) {
     const isKmz = fileName.toLowerCase().endsWith(".kmz");
     const kmlBytes = isKmz ? await unzipKmzToKml(inputBuf) : inputBuf;
 
-    // Process KML (DEM elevations, 3D depth structures)
-    const { kml: outKml, centroid } = await processKml(kmlBytes, opts, onProgress);
+    // Process KML (3D depth structures)
+    const { kml: outKml } = await processKml(kmlBytes, opts, onProgress);
 
     // Store in Vercel Blob + DB (non-blocking, don't fail the response)
     const { ip, region } = getClientInfo(request);
@@ -59,14 +59,11 @@ export async function POST(request: Request) {
       })
       .catch(() => {});
 
-    // Return processed KML text with centroid metadata for geoid correction
+    // Return processed KML text
     const headers: Record<string, string> = {
       "Content-Type": "application/vnd.google-earth.kml+xml",
       "X-Convert-Logs": JSON.stringify(logs),
     };
-    if (centroid) {
-      headers["X-DEM-Centroid"] = JSON.stringify(centroid);
-    }
     return new NextResponse(outKml.toString("utf-8"), { status: 200, headers });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
