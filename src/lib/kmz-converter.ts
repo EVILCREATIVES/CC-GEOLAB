@@ -540,11 +540,16 @@ function ringToMinMaxLines(
 }
 
 // ── Core process_kml ───────────────────────────────────────────
+export interface ProcessKmlResult {
+  kml: Buffer;
+  centroid: { lat: number; lon: number; demElev: number } | null;
+}
+
 export async function processKml(
   kmlBytes: Buffer,
   opts: ConvertOptions,
   onProgress?: (msg: string) => void
-): Promise<Buffer> {
+): Promise<ProcessKmlResult> {
   const { mode, offsetM, datumOffsetM, useDepthFromNames, generateVolumePolygons } = opts;
   const demCache = new Map<string, number>();
 
@@ -898,13 +903,31 @@ export async function processKml(
     }
   }
 
+  // Compute centroid from DEM cache for geoid correction
+  let centroid: { lat: number; lon: number; demElev: number } | null = null;
+  if (demCache.size > 0) {
+    let sumLat = 0, sumLon = 0, sumElev = 0, count = 0;
+    for (const [key, elev] of demCache) {
+      const [lonStr, latStr] = key.split(",");
+      sumLon += parseFloat(lonStr);
+      sumLat += parseFloat(latStr);
+      sumElev += elev;
+      count++;
+    }
+    centroid = {
+      lat: sumLat / count,
+      lon: sumLon / count,
+      demElev: sumElev / count + datumOffsetM + offsetM,
+    };
+  }
+
   onProgress?.("Serializing KML...");
   const serializer = new XMLSerializer();
   let xmlStr = serializer.serializeToString(doc);
   // Strip any XML declaration produced by the serializer to avoid duplicates
   xmlStr = xmlStr.replace(/^<\?xml[^?]*\?>\s*/i, "");
   xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + xmlStr;
-  return Buffer.from(xmlStr, "utf-8");
+  return { kml: Buffer.from(xmlStr, "utf-8"), centroid };
 }
 
 // ── Main entry point ───────────────────────────────────────────
@@ -926,7 +949,7 @@ export async function convertKmz(
     kmlBytes = inputBuf;
   }
 
-  const outKml = await processKml(kmlBytes, opts, onProgress);
+  const { kml: outKml } = await processKml(kmlBytes, opts, onProgress);
 
   onProgress?.("Re-packing as KMZ...");
   const outKmz = await rezipKmlToKmz(outKml, originalKmz);

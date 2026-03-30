@@ -892,8 +892,47 @@ ${rows.join("")}
               const resp = await fetch("/api/convert3d", { method: "POST", body: form, signal: controller.signal });
               clearTimeout(timeout);
               if (resp.ok) {
-                const kmlText = await resp.text();
+                let kmlText = await resp.text();
                 console.log("[3D Convert] Server returned", kmlText.length, "chars of KML");
+
+                // ── Geoid correction ──────────────────────────
+                // SRTM elevations are above the geoid (sea level) but CesiumJS
+                // "absolute" altitude mode expects WGS84 ellipsoid heights.
+                // Sample Cesium terrain at the data centroid to compute the offset.
+                const centroidHeader = resp.headers.get("X-DEM-Centroid");
+                if (centroidHeader) {
+                  try {
+                    const centroid = JSON.parse(centroidHeader) as { lat: number; lon: number; demElev: number };
+                    const carto = new Cesium.Cartographic(
+                      Cesium.Math.toRadians(centroid.lon),
+                      Cesium.Math.toRadians(centroid.lat),
+                      0
+                    );
+                    const terrainH = await sampleTerrainHeight(carto);
+                    const geoidOffset = terrainH - centroid.demElev;
+                    if (isFinite(geoidOffset) && Math.abs(geoidOffset) > 0.5) {
+                      console.log(`[3D Convert] Geoid correction: ${geoidOffset.toFixed(2)}m (terrain=${terrainH.toFixed(1)}, DEM=${centroid.demElev.toFixed(1)})`);
+                      setStatus(`Applying geoid correction (${geoidOffset.toFixed(1)}m)…`);
+                      kmlText = kmlText.replace(
+                        /(<coordinates>)([\s\S]*?)(<\/coordinates>)/g,
+                        (_match: string, open: string, body: string, close: string) => {
+                          const adjusted = body.replace(
+                            /([-\d.]+),([-\d.]+),([-\d.]+)/g,
+                            (_m: string, lon: string, lat: string, alt: string) => {
+                              const a = parseFloat(alt);
+                              return `${lon},${lat},${(isNaN(a) ? 0 : a + geoidOffset).toFixed(3)}`;
+                            }
+                          );
+                          return open + adjusted + close;
+                        }
+                      );
+                    }
+                  } catch (geoidErr) {
+                    console.warn("[3D Convert] Geoid correction failed, using raw altitudes:", geoidErr);
+                  }
+                }
+                // ── End geoid correction ──────────────────────
+
                 setStatus("Loading 3D data into viewer…");
                 await loadServerKml(kmlText, file.name);
                 setStatus("3D conversion complete ✓");
