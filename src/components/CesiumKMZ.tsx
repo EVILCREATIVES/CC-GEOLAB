@@ -1219,8 +1219,8 @@ ${rows.join("")}
 
         function camHeightMeters() {
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          // Use actual height (not absolute) so underground scales stay small
-          return carto ? Math.max(1, carto.height || 0) : 1;
+          // Use absolute height so underground scales stay reasonable
+          return carto ? Math.max(1, Math.abs(carto.height) || 1) : 1;
         }
 
         function joystickScales() {
@@ -1482,6 +1482,13 @@ ${rows.join("")}
         function driveOnce() {
           let moved = false;
           let movedLeft = false;
+
+          // Guard: if camera is underground and an orbit transform is active,
+          // release it immediately to prevent the stuck-joystick issue.
+          if (isUnderground() && ORBIT.pivot) {
+            resetOrbitState();
+          }
+
           const { moveScale, zoomStep } = joystickScales();
 
           if (state.left.active || state.left.x || state.left.y) {
@@ -1526,18 +1533,19 @@ ${rows.join("")}
               const invertY = js().invertY ?? false;
               const adjustedY = invertY ? -y : y;
 
-              // When underground and pushing "up" (y < 0 = Flight Up), move camera
-              // directly upward so the user can always escape underground
-              if (underground && adjustedY < 0) {
+              // When underground, orbit mode (lookAt) can trap the camera because
+              // globe.pick fails and the synthetic pivot creates degenerate orbits.
+              // Use direct camera rotation + vertical movement instead.
+              if (underground) {
                 try {
                   viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
                 } catch { /* noop */ }
                 clearOrbitTarget();
-                const lift = Math.abs(adjustedY) * 60;
-                viewer.camera.moveUp(lift);
-                // Also allow horizontal spin while escaping
+
+                const rSpeed = js().rotateSpeed ?? 1.0;
+
+                // Spin (yaw)
                 if (x) {
-                  const rSpeed = js().rotateSpeed ?? 1.0;
                   const dh = -x * 0.008 * rSpeed;
                   viewer.camera.setView({
                     orientation: {
@@ -1547,6 +1555,26 @@ ${rows.join("")}
                     },
                   });
                 }
+
+                // Flight Up / Down — always allow vertical movement underground
+                if (adjustedY) {
+                  const lift = -adjustedY * 60;
+                  if (lift > 0) {
+                    viewer.camera.moveUp(lift);
+                  } else {
+                    // Allow going deeper but with a gentle pitch shift too
+                    viewer.camera.moveDown(-lift * 0.5);
+                    const dp = adjustedY * 0.006 * rSpeed;
+                    viewer.camera.setView({
+                      orientation: {
+                        heading: viewer.camera.heading,
+                        pitch: clampPitch(viewer.camera.pitch + dp),
+                        roll: viewer.camera.roll,
+                      },
+                    });
+                  }
+                }
+
                 moved = true;
               } else {
                 ensureOrbitTarget();
