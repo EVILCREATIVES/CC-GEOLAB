@@ -1182,10 +1182,8 @@ ${rows.join("")}
           // When underground, always refresh the pivot so it doesn't get stale/distant
           if (!ORBIT.pivot || isUnderground()) {
             ORBIT.pivot = getScreenCenterPivot();
-            ORBIT.range = Math.min(
-              500,
-              Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot)
-            );
+            // Use the real distance so the camera doesn't jump on first frame
+            ORBIT.range = Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot);
             ORBIT.heading = viewer.camera.heading;
             ORBIT.pitch = viewer.camera.pitch;
           }
