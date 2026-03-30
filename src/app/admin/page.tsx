@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import AdminJoystickPresetPanel from "@/components/AdminJoystickPresetPanel";
 
-type Tab = "logs" | "users" | "rules" | "joystick";
+type Tab = "logs" | "users" | "rules" | "joystick" | "reports";
 
 export default function AdminPage() {
   const [password, setPassword] = useState("");
@@ -55,7 +55,7 @@ export default function AdminPage() {
           <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
         </div>
         <div style={styles.tabs}>
-          {(["logs", "users", "rules", "joystick"] as Tab[]).map((t) => (
+          {(["logs", "users", "rules", "joystick", "reports"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -67,7 +67,9 @@ export default function AdminPage() {
                 ? "Registered Users"
                 : t === "rules"
                 ? "AI Rules"
-                : "Joystick Preset"}
+                : t === "joystick"
+                ? "Joystick Preset"
+                : "Report Training"}
             </button>
           ))}
         </div>
@@ -75,6 +77,7 @@ export default function AdminPage() {
         {tab === "users" && <UsersTab token={token} />}
         {tab === "rules" && <RulesTab token={token} />}
         {tab === "joystick" && <AdminJoystickPresetPanel />}
+        {tab === "reports" && <ReportTrainingTab token={token} />}
       </div>
     </div>
   );
@@ -279,6 +282,95 @@ function RuleEditor({ rule, onSave, onDelete }: { rule: RuleEntry; onSave: (k: s
       <p style={{ fontSize: 10, color: "var(--muted)", margin: "4px 0 0" }}>
         Last updated: {new Date(rule.updatedAt).toLocaleString()}
       </p>
+    </div>
+  );
+}
+
+/* ── Report Training Tab ─────────────────────────── */
+function ReportTrainingTab({ token }: { token: string }) {
+  const [value, setValue] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch("/api/admin/rules", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const rule = (data.rules || []).find((r: RuleEntry) => r.key === "gemini_report_examples");
+      if (rule) {
+        setValue(rule.value);
+        setUpdatedAt(rule.updatedAt);
+      }
+    }
+    setLoading(false);
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    await fetch("/api/admin/rules", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: "gemini_report_examples",
+        value,
+        label: "Report Style Examples (Few-Shot Training)",
+      }),
+    });
+    setDirty(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    load();
+  };
+
+  if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
+
+  return (
+    <div>
+      <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 8px" }}>
+        Paste example reports below to teach the AI assistant how CC Explorations presents findings to clients.
+        These examples are injected into the system prompt as few-shot training — the AI will mimic this tone, structure, and terminology.
+      </p>
+      <p style={{ color: "var(--muted)", fontSize: 12, margin: "0 0 12px" }}>
+        <strong>Format:</strong> Include full example reports with headers, depth tables, rankings, and recommendations.
+        Separate examples with <code>=== EXAMPLE N: Title ===</code> headers. Include a <code>CLIENT QUESTION:</code> and the corresponding <code>CC EXPLORATIONS REPORT:</code> for each.
+      </p>
+      <textarea
+        value={value}
+        onChange={(e) => { setValue(e.target.value); setDirty(true); }}
+        rows={28}
+        style={{ ...styles.input, resize: "vertical" as const, fontFamily: "monospace", fontSize: 12, lineHeight: "1.5" }}
+        placeholder={"=== EXAMPLE 1: Gold Survey (Site Name) ===\n\nCLIENT QUESTION: \"Analyze the AMRT results for this site.\"\n\nCC EXPLORATIONS REPORT:\n\n# AMRT Survey Report — Site Name\n\n## 1. Survey Overview\n...\n\n## 2. Identified Structures\n...\n\n## 3. Recommendations\n1. ...\n2. ..."}
+      />
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+        {dirty && (
+          <button onClick={save} style={styles.btn}>
+            Save Report Examples
+          </button>
+        )}
+        {saved && <span style={{ color: "#4ade80", fontSize: 13 }}>Saved! Changes take effect immediately.</span>}
+      </div>
+      {updatedAt && (
+        <p style={{ fontSize: 10, color: "var(--muted)", margin: "8px 0 0" }}>
+          Last updated: {new Date(updatedAt).toLocaleString()}
+        </p>
+      )}
+      <div style={{ ...styles.ruleCard, marginTop: 16, borderColor: "rgba(46, 168, 255, 0.3)" }}>
+        <h4 style={{ margin: "0 0 8px", color: "var(--accent)" }}>Tips for Effective Report Training</h4>
+        <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "var(--muted)", lineHeight: "1.7" }}>
+          <li>Include 2–5 complete example reports covering different resource types (Au, Oil, Cu, H2O, Void)</li>
+          <li>Each example should show the client question and the full expected report</li>
+          <li>Use real data from CC Explorations surveys — entity names, depth ranges, coordinates</li>
+          <li>Include the standard report sections: Survey Overview, Structures, Interpretation, Recommendations</li>
+          <li>Add a &quot;Reporting Style Notes&quot; section at the end for general style rules</li>
+          <li>The AI will match the tone, detail level, and terminology from these examples</li>
+        </ul>
+      </div>
     </div>
   );
 }

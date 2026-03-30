@@ -1,0 +1,4 @@
+# Training data contains client reports — do not commit
+*.docx
+*.kmz
+training-output.json

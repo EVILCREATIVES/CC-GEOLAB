@@ -53,3 +53,14 @@ model AiRule {
   value     String   @db.Text // for joystick_preset, value is JSON
   updatedAt DateTime @updatedAt
 }
+
+// ── Report training examples (few-shot for AI chat) ────────────
+model ReportExample {
+  id          String   @id @default(cuid())
+  name        String   // e.g. "CCE Scan Cu Luna"
+  resources   String[] // e.g. ["Cu"], ["Au", "H2O", "Void"]
+  reportText  String   @db.Text // cleaned report markdown
+  kmzSummary  String?  @db.Text // extracted KMZ metadata
+  charCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+}

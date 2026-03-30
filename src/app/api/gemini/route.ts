@@ -1,9 +1,110 @@
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
 type ChatMessage = {
   role: "user" | "assistant";
   text: string;
 };
+
+/** Resource tags we recognize in file context */
+const RESOURCE_KEYWORDS: Record<string, string[]> = {
+  Au: ["Au", "gold", "Gold"],
+  Cu: ["Cu", "copper", "Copper"],
+  Oil: ["Oil", "oil", "petroleum", "hydrocarbon"],
+  H2O: ["H2O", "water", "Water", "aquifer"],
+  Li: ["Li", "lithium", "Lithium"],
+  Gas: ["Gas", "gas", "natural gas"],
+  Void: ["Void", "void", "cavity", "cave"],
+  Ag: ["Ag", "silver", "Silver"],
+  Graphene: ["Graphene", "graphene", "graphite"],
+};
+
+/** Detect resource types from file context string */
+function detectResourcesFromContext(ctx: string): string[] {
+  const found: string[] = [];
+  for (const [tag, keywords] of Object.entries(RESOURCE_KEYWORDS)) {
+    if (keywords.some((kw) => ctx.includes(kw))) found.push(tag);
+  }
+  return found;
+}
+
+/** Max chars of report examples to inject (keeps prompt reasonable) */
+const MAX_EXAMPLE_CHARS = 60_000;
+
+/**
+ * Load style guide + best-matching report examples from the DB.
+ * ONLY selects reports whose resource tags overlap with the loaded file.
+ * Falls back to shortest-available if no file is loaded or no match found.
+ */
+async function loadTrainingContext(fileContext: string | null): Promise<string> {
+  try {
+    // 1. Always load the style guide
+    const guideRule = await prisma.aiRule.findUnique({
+      where: { key: "gemini_report_style_guide" },
+    });
+    const styleGuide = guideRule?.value || "";
+
+    // 2. Load all report examples
+    const allExamples = await prisma.reportExample.findMany({
+      orderBy: { charCount: "asc" },
+    });
+
+    if (!allExamples.length) return styleGuide;
+
+    // 3. Detect resources from the loaded file
+    const fileResources = fileContext ? detectResourcesFromContext(fileContext) : [];
+
+    let candidates: typeof allExamples;
+
+    if (fileResources.length > 0) {
+      // STRICT: only pick reports that share at least one resource tag with the file
+      candidates = allExamples.filter((ex) =>
+        ex.resources.some((tag) => fileResources.includes(tag)),
+      );
+
+      // Sort by overlap count desc (most matching tags first), then shortest first
+      candidates.sort((a, b) => {
+        const overlapA = a.resources.filter((t) => fileResources.includes(t)).length;
+        const overlapB = b.resources.filter((t) => fileResources.includes(t)).length;
+        return overlapB - overlapA || a.charCount - b.charCount;
+      });
+    } else {
+      // No file loaded → use shortest diverse set
+      candidates = allExamples;
+    }
+
+    // If strict filtering found nothing (rare resource type), fall back to all
+    if (!candidates.length) candidates = allExamples;
+
+    // Pick examples within budget — max 4
+    const selected: typeof candidates = [];
+    let totalChars = 0;
+
+    for (const ex of candidates) {
+      if (totalChars + ex.charCount > MAX_EXAMPLE_CHARS) continue;
+      selected.push(ex);
+      totalChars += ex.charCount;
+      if (selected.length >= 4) break;
+    }
+
+    if (!selected.length) return styleGuide;
+
+    const matchNote = fileResources.length
+      ? `Matched resources: [${fileResources.join(", ")}]`
+      : "No file loaded — showing general examples";
+
+    // Build the training block
+    const exampleBlocks = selected.map((ex, i) => {
+      const header = `=== EXAMPLE ${i + 1}: ${ex.name} [${ex.resources.join(", ")}] ===`;
+      const kmz = ex.kmzSummary ? `\nSURVEY DATA:\n${ex.kmzSummary}\n` : "";
+      return `${header}\n${kmz}\nREPORT:\n${ex.reportText}`;
+    });
+
+    return `${styleGuide}\n\n--- REFERENCE REPORTS (${selected.length} of ${allExamples.length} — ${matchNote}) ---\nThese are real CC Explorations reports for the same resource type(s) as the loaded file. Use them as style and content reference ONLY — do NOT copy specific data, depths, or locations from these examples into your analysis of the currently loaded file.\n\n${exampleBlocks.join("\n\n---\n\n")}`;
+  } catch {
+    return "";
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -29,6 +130,9 @@ export async function POST(request: Request) {
     if (!sanitized.length) {
       return NextResponse.json({ error: "No messages provided." }, { status: 400 });
     }
+
+    // Load smart training context (style guide + matching report examples)
+    const trainingContext = await loadTrainingContext(fileContext);
 
     const appGuide = `
 --- CC-GEOLAB PLATFORM GUIDE ---
@@ -154,14 +258,14 @@ When analyzing loaded data:
 - Flag any data quality concerns (gaps, inconsistencies, insufficient coverage)
 
 Always complete your full reasoning. Never stop mid-sentence or mid-thought.
-
+${trainingContext ? `\n--- CC EXPLORATIONS REPORT STYLE REFERENCE ---\nThe following style guide and example reports show how CC Explorations presents AMRT survey findings to clients. Match this tone, structure, terminology, and level of detail in your responses:\n\n${trainingContext}\n--- END REPORT STYLE REFERENCE ---\n` : ""}
 ${appGuide}
 
 --- LOADED FILE DATA ---
 ${fileContext}
 --- END FILE DATA ---`
       : `You are a senior resource analyst for CC Explorations (ccexplorations.com), the developer of AMRT — Atomic Mineral Resonance Tomography. AMRT is a proprietary satellite-based exploration technology that operates from orbit using satellite sensors, AI analytics, and advanced geospatial physics to identify subsurface resources (minerals, oil, gas, water) with up to 93% accuracy and zero environmental disturbance. It integrates multispectral/hyperspectral imaging, gravitational and magnetic field analysis, topographic layering, and proprietary AI algorithms to produce layered 2D/3D subsurface maps. Results are delivered in 15–45 days at a fraction of traditional exploration costs. Your expertise spans AMRT data interpretation, mineral resource classification (Cu, Au, Oil, H2O, Gas, Void), depth modeling, vein structure analysis, exploration target prioritization, subsurface 3D visualization, and industry-standard reporting (JORC/NI 43-101 terminology). No file is currently loaded. You can answer questions about AMRT technology, geological interpretation, exploration best practices, resource analysis, and how to use the CC-GEOLAB platform. Always complete your full reasoning. Never stop mid-sentence or mid-thought.
-
+${trainingContext ? `\n--- CC EXPLORATIONS REPORT STYLE REFERENCE ---\nThe following style guide and example reports show how CC Explorations presents AMRT survey findings to clients. Match this tone, structure, terminology, and level of detail in your responses:\n\n${trainingContext}\n--- END REPORT STYLE REFERENCE ---\n` : ""}
 ${appGuide}`;
 
     const contents = [
