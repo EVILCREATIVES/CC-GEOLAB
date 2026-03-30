@@ -215,27 +215,6 @@ export default function HelpPanel() {
           borderBottom: "1px solid var(--line)",
         }}
       >
-        {starterPrompts.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            onClick={() => submitText(prompt)}
-            disabled={loading}
-            style={{
-              border: "1px solid var(--line)",
-              borderRadius: 6,
-              background: "rgba(33, 56, 87, 0.55)",
-              color: "var(--text)",
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: 11,
-              padding: "6px 10px",
-              textAlign: "left",
-              width: "100%",
-            }}
-          >
-            {prompt}
-          </button>
-        ))}
       </div>
 
       <div
