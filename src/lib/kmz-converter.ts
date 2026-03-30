@@ -179,6 +179,25 @@ function whichCommodity(name: string): string | null {
   return null;
 }
 
+/** Walk the placemark's parent Folder chain to resolve commodity from folder names */
+function whichCommodityFromAncestors(el: Element): string | null {
+  let node = el.parentNode as Element | null;
+  while (node) {
+    const localName = node.localName || node.nodeName?.replace(/^.*:/, "");
+    if (localName === "Folder" || localName === "Document") {
+      const nameEl = Array.from(node.childNodes).find(
+        (c: any) => (c.localName || c.nodeName?.replace(/^.*:/, "")) === "name"
+      ) as Element | undefined;
+      if (nameEl?.textContent) {
+        const hit = whichCommodity(nameEl.textContent.trim());
+        if (hit) return hit;
+      }
+    }
+    node = node.parentNode as Element | null;
+  }
+  return null;
+}
+
 function isSurveyArea(name: string): boolean {
   return /\bSurvey\s*Area\b/i.test(name || "");
 }
@@ -694,7 +713,7 @@ export async function processKml(
           const zMax = E - Math.abs(maxM);
 
           const [nmSurface, nmMin, nmMax] = derivePrettyNames(pmName);
-          const comm = whichCommodity(pmName);
+          const comm = whichCommodity(pmName) || whichCommodityFromAncestors(placemark) || "";
 
           const folder = kmlEl(doc, "Folder");
           folder.appendChild(kmlEl(doc, "name", `${pmName} – 3D Depths`));
@@ -804,7 +823,7 @@ export async function processKml(
     const surfaceLlh: Coord3[] = outerCoordsLlh.map(([lon, lat, alt]) => [lon, lat, alt ?? 0] as Coord3);
     const [lon0, lat0] = outerCoordsLlh[0];
     const nd = nearestDepths(lon0, lat0);
-    const commFinal = whichCommodity(pmName) || (nd ? nd[3] : "") || "";
+    const commFinal = whichCommodity(pmName) || (nd ? nd[3] : "") || whichCommodityFromAncestors(placemark) || "";
 
     const parent = placemark.parentNode as Element;
     const siblings = Array.from(parent.childNodes);
