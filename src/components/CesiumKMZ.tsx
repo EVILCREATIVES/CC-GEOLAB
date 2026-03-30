@@ -1130,7 +1130,7 @@ ${rows.join("")}
         const RADIUS = (PAD - KN) / 2;
         const BASE_DEAD = 0.08;
         const BASE_DAMP = 0.22;
-        const BASE_STRAFE = 18.0;
+        const BASE_STRAFE = 6.0;
 
         const js = () => (window as any).__joystickSettings || {};
         const getDead = () => js().deadZone ?? BASE_DEAD;
@@ -1226,8 +1226,8 @@ ${rows.join("")}
         function joystickScales() {
           const h = Math.max(1, camHeightMeters());
           const hk = Math.max(1, h / 1000);
-          const moveScale = Cesium.Math.clamp(hk, 0.2, 200);
-          const zoomStep = Cesium.Math.clamp(h * 0.02, 5, 5000);
+          const moveScale = Cesium.Math.clamp(hk, 0.1, 80);
+          const zoomStep = Cesium.Math.clamp(h * 0.008, 1, 2000);
           return { moveScale, zoomStep };
         }
 
@@ -1497,7 +1497,9 @@ ${rows.join("")}
 
             if (x) {
               const mSpeed = js().moveSpeed ?? 1.0;
-              const m = BASE_STRAFE * moveScale * Math.abs(x) * mSpeed;
+              // Quadratic curve: small deflections = fine control, full push = fast
+              const ax = Math.abs(x);
+              const m = BASE_STRAFE * moveScale * ax * ax * mSpeed;
               if (x < 0) viewer.camera.moveLeft(m);
               else viewer.camera.moveRight(m);
               moved = true;
@@ -1506,7 +1508,8 @@ ${rows.join("")}
 
             if (y) {
               const zSpeed = js().zoomSpeed ?? 1.0;
-              const z = zoomStep * Math.abs(y) * zSpeed;
+              const ay = Math.abs(y);
+              const z = zoomStep * ay * ay * zSpeed;
               if (y < 0) viewer.camera.zoomIn(z);
               else viewer.camera.zoomOut(z);
               ORBIT.range = Math.max(5, ORBIT.range + (y < 0 ? -z : z));
