@@ -86,6 +86,7 @@ function transformKmlFor3D(kml: string): string {
       [/\b(Au|Gold)\b/i, "Gold"], [/\b(Cu|Copper)\b/i, "Copper"],
       [/\b(Li|Lithium)\b/i, "Lithium"], [/\b(Ag|Silver)\b/i, "Silver"],
       [/(Oil|Petroleum|Crude)/i, "Oil & Gas"], [/(Ground\s*Water|Water\s*Table)/i, "Ground Water"],
+      [/(Graphite|Graphene)/i, "Graphite"], [/(Ruthenium|\bRu\b)/i, "Ruthenium"],
     ];
     let commodity = "";
     for (const [rx, label] of commodityPatterns) { if (rx.test(rawName)) { commodity = label; break; } }
@@ -325,6 +326,8 @@ ${rows.join("")}
         "Ship Wrecks":    Cesium.Color.fromBytes(139, 90, 43, 255),
         Explosives:       Cesium.Color.fromBytes(255, 60, 60, 255),
         "Ancient Ruins":  Cesium.Color.fromBytes(180, 160, 120, 255),
+        Graphite:         Cesium.Color.fromBytes(64, 64, 64, 255),
+        Ruthenium:        Cesium.Color.fromBytes(160, 180, 200, 255),
       };
       // Also map folder shorthand to the same
       COMMODITY_COLOR.Cu = COMMODITY_COLOR.Copper;
@@ -335,6 +338,8 @@ ${rows.join("")}
       COMMODITY_COLOR.H2O = COMMODITY_COLOR["Ground Water"];
       COMMODITY_COLOR.Gas = Cesium.Color.fromBytes(110, 168, 163, 255);
       COMMODITY_COLOR.Void = Cesium.Color.fromBytes(123, 225, 52, 255);
+      COMMODITY_COLOR.Graphene = COMMODITY_COLOR.Graphite;
+      COMMODITY_COLOR.Ru = COMMODITY_COLOR.Ruthenium;
 
       const DEPOSIT_ALPHA = 0.35;
       const COLUMN_COLOR = Cesium.Color.MAGENTA.withAlpha(0.92);

@@ -166,6 +166,9 @@ const COMMODITY_PATTERNS: [RegExp, string][] = [
   [/(H2O|Ground\s*Water|Water\s*Table)/i, "Ground Water"],
   [/Explosives?/i, "Explosives"],
   [/(Ancient\s*Ruins?|Artifacts?)/i, "Ancient Ruins"],
+  [/(Graphite|Graphene)/i, "Graphite"],
+  [/(Ruthenium|\bRu\b)/i, "Ruthenium"],
+  [/\bVoid\b/i, "Void"],
 ];
 
 function whichCommodity(name: string): string | null {
@@ -805,6 +808,8 @@ export async function processKml(
     // LINESTRING: min/max depth lines
     if (hasLine) {
       const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
+      // Skip if no actual depth data is available (would produce identical surface-level lines)
+      if (mnAny === 0 && mxAny === 0) continue;
       const baseN = cleanBase(pmName);
       const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
       const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
@@ -828,6 +833,11 @@ export async function processKml(
       } else {
         ({ minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths));
       }
+
+      // Skip generating depth structures when no depth data is available
+      // (would produce degenerate zero-thickness polygons at surface level)
+      if (mnAny === 0 && mxAny === 0) continue;
+
       const baseN = cleanBase(pmName);
       const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
       const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
