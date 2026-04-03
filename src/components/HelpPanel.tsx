@@ -8,12 +8,6 @@ type Message = {
   text: string;
 };
 
-const starterPrompts = [
-  "What is AMRT and how does it detect subsurface resources?",
-  "Analyze the loaded data and rank targets by discovery confidence.",
-  "What do the depth ranges and signatures suggest for drill validation?",
-];
-
 function RobotIcon({ size = 24 }: { size?: number }) {
   return (
     <svg
@@ -67,6 +61,10 @@ export default function HelpPanel() {
   const [open, setOpen] = useState(false);
   const { summary } = useGeoData();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [reportMenu, setReportMenu] = useState(false);
+  const [reportPassword, setReportPassword] = useState("");
+  const [reportError, setReportError] = useState("");
+  const [reportLoading, setReportLoading] = useState(false);
 
   // On desktop, default to open; on mobile, default to closed
   useEffect(() => {
@@ -116,6 +114,46 @@ export default function HelpPanel() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await submitText(input);
+  }
+
+  async function downloadReport(format: "docx" | "pdf") {
+    setReportLoading(true);
+    setReportError("");
+    try {
+      const res = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: reportPassword,
+          format,
+          fileContext: summary?.llmContext ?? null,
+          chatHistory: messages,
+          fileName: summary?.fileName ?? "AMRT Survey",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Request failed." }));
+        setReportError(data.error || "Request failed.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        (summary?.fileName?.replace(/[^a-zA-Z0-9 _\-().]/g, "") || "Report") +
+        `_Report.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setReportMenu(false);
+      setReportPassword("");
+    } catch {
+      setReportError("Network error.");
+    } finally {
+      setReportLoading(false);
+    }
   }
 
   if (!open) {
@@ -177,23 +215,105 @@ export default function HelpPanel() {
             CC Explorations — Atomic Mineral Resonance Tomography
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label="Close assistant"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "var(--muted)",
-            fontSize: 20,
-            cursor: "pointer",
-            padding: "4px 8px",
-            lineHeight: 1,
-          }}
-        >
-          ✕
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            type="button"
+            onClick={() => { setReportMenu(!reportMenu); setReportError(""); }}
+            aria-label="Download report"
+            title="Download Report"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--muted)",
+              fontSize: 16,
+              cursor: "pointer",
+              padding: "4px 8px",
+              lineHeight: 1,
+            }}
+          >
+            📄
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Close assistant"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--muted)",
+              fontSize: 20,
+              cursor: "pointer",
+              padding: "4px 8px",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
       </div>
+
+      {reportMenu && (
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", background: "rgba(16,24,36,0.6)" }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Enter password to generate report</div>
+          <input
+            type="password"
+            placeholder="Password"
+            value={reportPassword}
+            onChange={(e) => setReportPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && reportPassword) downloadReport("docx"); }}
+            style={{
+              width: "100%",
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid var(--line)",
+              borderRadius: 6,
+              color: "var(--text)",
+              padding: "6px 8px",
+              fontSize: 12,
+              outline: "none",
+              marginBottom: 8,
+            }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              disabled={!reportPassword || reportLoading}
+              onClick={() => downloadReport("docx")}
+              style={{
+                flex: 1,
+                border: "1px solid var(--line)",
+                borderRadius: 6,
+                background: reportPassword && !reportLoading ? "var(--accent)" : "#4b5f76",
+                color: "#001425",
+                padding: "6px 0",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: reportPassword && !reportLoading ? "pointer" : "not-allowed",
+              }}
+            >
+              {reportLoading ? "Generating…" : "DOCX"}
+            </button>
+            <button
+              type="button"
+              disabled={!reportPassword || reportLoading}
+              onClick={() => downloadReport("pdf")}
+              style={{
+                flex: 1,
+                border: "1px solid var(--line)",
+                borderRadius: 6,
+                background: reportPassword && !reportLoading ? "var(--accent)" : "#4b5f76",
+                color: "#001425",
+                padding: "6px 0",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: reportPassword && !reportLoading ? "pointer" : "not-allowed",
+              }}
+            >
+              {reportLoading ? "Generating…" : "PDF"}
+            </button>
+          </div>
+          {reportError && <div style={{ color: "#ff9e9e", fontSize: 11, marginTop: 6 }}>{reportError}</div>}
+        </div>
+      )}
 
       {summary && (
         <div style={{ padding: "6px 14px", borderBottom: "1px solid var(--line)", fontSize: 11, color: "var(--accent)", display: "flex", alignItems: "center", gap: 6 }}>
@@ -201,36 +321,6 @@ export default function HelpPanel() {
           Analyzing: {summary.fileName} ({summary.entityCount} entities, {summary.folderNames.length} folders)
         </div>
       )}
-
-      <div
-        style={{
-          padding: "10px 12px",
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          borderBottom: "1px solid var(--line)",
-        }}
-      >
-        {starterPrompts.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            onClick={() => submitText(prompt)}
-            disabled={loading}
-            style={{
-              border: "1px solid var(--line)",
-              borderRadius: 999,
-              background: "rgba(33, 56, 87, 0.55)",
-              color: "var(--text)",
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: 11,
-              padding: "5px 10px",
-            }}
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
 
       <div
         ref={scrollRef}

@@ -52,7 +52,10 @@ export default function AdminPage() {
       <div style={styles.container}>
         <div style={styles.header}>
           <h1 style={{ margin: 0, fontSize: 20, color: "var(--accent)" }}>CC GEOLAB Admin</h1>
-          <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <a href="/" style={{ ...styles.btn, background: "#1a3a5c", textDecoration: "none", display: "inline-flex", alignItems: "center" }}>← Back to Map</a>
+            <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
+          </div>
         </div>
         <div style={styles.tabs}>
           {(["logs", "users", "rules", "joystick", "reports"] as Tab[]).map((t) => (
