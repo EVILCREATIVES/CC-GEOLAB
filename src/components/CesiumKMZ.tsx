@@ -769,41 +769,66 @@ ${rows.join("")}
           if (btnLoad) btnLoad.disabled = false;
         };
 
+        const loadServerKml = async (kmlText: string, sourceName: string) => {
+          const xml = new DOMParser().parseFromString(kmlText, "application/xml");
+          await loadKmlXml(xml, sourceName);
+        };
+
         const statusEl = document.getElementById("uploadStatus");
         const setStatus = (msg: string) => {
           if (statusEl) statusEl.textContent = msg;
         };
 
         try {
-          if (name.endsWith(".kml")) {
-            const txt = await readAsText(file);
-            const txt3d = transformKmlFor3D(txt);
-            const xml = new DOMParser().parseFromString(txt3d, "application/xml");
-            await loadKmlXml(xml, file.name);
-            return;
-          }
-
-          if (name.endsWith(".kmz")) {
-            const JSZip = await waitForGlobal("JSZip", 8000);
-            if (!JSZip) {
-              console.error("[KMZ] JSZip not available");
-              return;
+          if (name.endsWith(".kml") || name.endsWith(".kmz")) {
+            // Server-side 3D transform via kmz-converter (DEM elevations + depth structures)
+            setStatus("Uploading & converting to 3D (DEM elevations)…");
+            const form = new FormData();
+            form.append("file", file);
+            try {
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 90_000);
+              const resp = await fetch("/api/convert3d", { method: "POST", body: form, signal: controller.signal });
+              clearTimeout(timeout);
+              if (resp.ok) {
+                const kmlText = await resp.text();
+                console.log("[3D Convert] Server returned", kmlText.length, "chars of KML");
+                setStatus("Loading 3D data into viewer…");
+                await loadServerKml(kmlText, file.name);
+                setStatus("3D conversion complete ✓");
+                return;
+              } else {
+                const errBody = await resp.json().catch(() => ({ error: "unknown" }));
+                console.warn("[3D Convert] Server error:", resp.status, errBody.error);
+                setStatus("Server transform failed – using client fallback…");
+              }
+            } catch (networkErr) {
+              console.warn("[3D Convert] Network error, falling back to client transform:", networkErr);
+              setStatus("Server unavailable – using client fallback…");
             }
 
-            const ab = await readAsArrayBuffer(file);
-            const zip = await JSZip.loadAsync(ab);
-
-            const kmlPath = Object.keys(zip.files).find((p) => p.toLowerCase().endsWith(".kml")) || "";
-
-            if (!kmlPath) {
-              console.error("[KMZ] No .kml found inside KMZ");
-              return;
+            // Fallback: client-side regex transform
+            try {
+              let kmlText: string;
+              if (name.endsWith(".kmz")) {
+                const JSZipLib = await waitForGlobal("JSZip", 8000);
+                if (!JSZipLib) { console.error("[KMZ] JSZip not available"); return; }
+                const ab = await readAsArrayBuffer(file);
+                const zip = await JSZipLib.loadAsync(ab);
+                const kmlPath = Object.keys(zip.files).find((p: string) => p.toLowerCase().endsWith(".kml")) || "";
+                if (!kmlPath) { console.error("[KMZ] No .kml found inside KMZ"); return; }
+                kmlText = await zip.file(kmlPath).async("text");
+              } else {
+                kmlText = await readAsText(file);
+              }
+              const kml3d = transformKmlFor3D(kmlText);
+              const xml = new DOMParser().parseFromString(kml3d, "application/xml");
+              await loadKmlXml(xml, file.name);
+              setStatus("Client-side 3D transform complete ✓");
+            } catch (fallbackErr) {
+              console.error("[3D Convert] Client fallback also failed:", fallbackErr);
+              setStatus("3D conversion failed.");
             }
-
-            const kmlText = await zip.file(kmlPath).async("text");
-            const kml3d = transformKmlFor3D(kmlText);
-            const xml = new DOMParser().parseFromString(kml3d, "application/xml");
-            await loadKmlXml(xml, kmlPath);
             return;
           }
 
