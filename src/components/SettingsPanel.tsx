@@ -1,9 +1,7 @@
 "use client";
 
-
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { useGeoData } from "@/context/GeoDataContext";
 
 export interface JoystickSettings {
   moveSpeed: number;
@@ -17,7 +15,7 @@ export interface JoystickSettings {
   mouseSensitivity: number;
 }
 
-export const DEFAULTS: JoystickSettings = {
+const DEFAULTS: JoystickSettings = {
   moveSpeed: 1.0,
   zoomSpeed: 1.0,
   rotateSpeed: 1.0,
@@ -73,133 +71,35 @@ function Slider({ label, value, min, max, step, unit, onChange }: {
 }
 
 export default function SettingsPanel() {
-  const { user } = useGeoData();
   const [settings, setSettings] = useState<JoystickSettings>(DEFAULTS);
   const [target, setTarget] = useState<HTMLElement | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [preset, setPreset] = useState<JoystickSettings | null>(null);
-  const [source, setSource] = useState<string>("default");
-  const [msg, setMsg] = useState<string>("");
 
-  // Fetch settings (user or preset) on mount
   useEffect(() => {
-    let cancelled = false;
-    async function fetchSettings() {
-      setLoading(true);
-      setMsg("");
-      try {
-        const headers: Record<string, string> = {};
-        if (user?.id) headers["x-user-id"] = user.id;
-        const res = await fetch("/api/settings/joystick", { headers });
-        const data = await res.json();
-        if (!cancelled) {
-          if (data.settings) {
-            setSettings({ ...DEFAULTS, ...data.settings });
-            publishSettings({ ...DEFAULTS, ...data.settings });
-            setSource(data.source || "default");
-          } else {
-            setSettings({ ...DEFAULTS });
-            publishSettings(DEFAULTS);
-            setSource("default");
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setSettings({ ...DEFAULTS });
-          publishSettings(DEFAULTS);
-          setSource("default");
-        }
-      }
-      setLoading(false);
-    }
-    fetchSettings();
+    const s = loadSettings();
+    setSettings(s);
+    publishSettings(s);
+
     // Wait for CesiumKMZ to render #settingsBody
     const poll = setInterval(() => {
       const el = document.getElementById("settingsBody");
       if (el) { setTarget(el); clearInterval(poll); }
     }, 200);
-    return () => { cancelled = true; clearInterval(poll); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+    return () => clearInterval(poll);
+  }, []);
 
-  // Fetch preset for admin
-  useEffect(() => {
-    async function checkAdminAndFetchPreset() {
-      if (!user?.email) return;
-      // crude: treat any user with email ending in admin as admin
-      if (/admin/i.test(user.email)) setIsAdmin(true);
-      try {
-        const res = await fetch("/api/settings/joystick/preset");
-        const data = await res.json();
-        if (data.settings) setPreset({ ...DEFAULTS, ...data.settings });
-      } catch {}
-    }
-    checkAdminAndFetchPreset();
-  }, [user]);
-
-  async function update(patch: Partial<JoystickSettings>) {
+  function update(patch: Partial<JoystickSettings>) {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
+      saveSettings(next);
       publishSettings(next);
-      if (user?.id) {
-        // Save to server
-        fetch("/api/settings/joystick", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-user-id": user.id },
-          body: JSON.stringify(next),
-        }).then(() => setMsg("Saved!"));
-      } else {
-        // Guest: local only
-        saveSettings(next);
-      }
       return next;
     });
   }
 
-  async function resetDefaults() {
-    setMsg("");
-    setLoading(true);
-    // Reload from API (user or preset)
-    try {
-      const headers: Record<string, string> = {};
-      if (user?.id) headers["x-user-id"] = user.id;
-      const res = await fetch("/api/settings/joystick", { headers });
-      const data = await res.json();
-      if (data.settings) {
-        setSettings({ ...DEFAULTS, ...data.settings });
-        publishSettings({ ...DEFAULTS, ...data.settings });
-        setSource(data.source || "default");
-      } else {
-        setSettings({ ...DEFAULTS });
-        publishSettings(DEFAULTS);
-        setSource("default");
-      }
-    } catch {
-      setSettings({ ...DEFAULTS });
-      publishSettings(DEFAULTS);
-      setSource("default");
-    }
-    setLoading(false);
-  }
-
-  async function saveAsPreset() {
-    setMsg("");
-    try {
-      const res = await fetch("/api/settings/joystick/preset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer ccadmin2026" },
-        body: JSON.stringify(settings),
-      });
-      if (res.ok) {
-        setMsg("Preset saved!");
-        setPreset(settings);
-      } else {
-        setMsg("Failed to save preset");
-      }
-    } catch {
-      setMsg("Failed to save preset");
-    }
+  function resetDefaults() {
+    setSettings({ ...DEFAULTS });
+    saveSettings(DEFAULTS);
+    publishSettings(DEFAULTS);
   }
 
   if (!target) return null;
@@ -210,11 +110,6 @@ export default function SettingsPanel() {
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {loading && <div style={{ color: "#aaa", marginBottom: 8 }}>Loading settings…</div>}
-      {msg && <div style={{ color: "#4af", marginBottom: 8 }}>{msg}</div>}
-      <div style={{ color: "#888", fontSize: 10, marginBottom: 4 }}>
-        Source: {source}
-      </div>
       {/* Visibility */}
       <div style={sec}>Visibility</div>
       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 6, cursor: "pointer" }}>
@@ -262,29 +157,10 @@ export default function SettingsPanel() {
           color: "#ccc",
           fontSize: 11,
           cursor: "pointer",
-          marginBottom: 6,
         }}
       >
         Reset to Defaults
       </button>
-      {isAdmin && (
-        <button
-          type="button"
-          onClick={saveAsPreset}
-          style={{
-            width: "100%",
-            border: "1px solid #4af",
-            borderRadius: 4,
-            padding: "5px 8px",
-            background: "#111",
-            color: "#4af",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
-        >
-          Save as Preset (Admin)
-        </button>
-      )}
     </div>,
     target,
   );

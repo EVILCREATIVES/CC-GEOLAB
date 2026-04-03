@@ -2,8 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import * as React from "react";
-import { useEffect, useRef, useState, useCallback } from "react";
-import { useGeoData, type GeoEntity, type GeoFileSummary, type UserInfo } from "@/context/GeoDataContext";
+import { useEffect, useRef } from "react";
+import { useGeoData, type GeoEntity, type GeoFileSummary } from "@/context/GeoDataContext";
 
 function ensureHeadAsset(tag: "link" | "script", attrs: Record<string, string>) {
   const selector = tag === "link" ? `link[href="${attrs.href}"]` : `script[src="${attrs.src}"]`;
@@ -81,19 +81,9 @@ function transformKmlFor3D(kml: string): string {
 
     const baseName = rawName.slice(0, dm.index).replace(/[\s/\\]+$/, "").trim() || "Deposit";
 
-    // Detect commodity from name for coloring
-    const commodityPatterns: [RegExp, string][] = [
-      [/\b(Au|Gold)\b/i, "Gold"], [/\b(Cu|Copper)\b/i, "Copper"],
-      [/\b(Li|Lithium)\b/i, "Lithium"], [/\b(Ag|Silver)\b/i, "Silver"],
-      [/(Oil|Petroleum|Crude)/i, "Oil & Gas"], [/(Ground\s*Water|Water\s*Table)/i, "Ground Water"],
-      [/(Graphite|Graphene)/i, "Graphite"], [/(Ruthenium|\bRu\b)/i, "Ruthenium"],
-    ];
-    let commodity = "";
-    for (const [rx, label] of commodityPatterns) { if (rx.test(rawName)) { commodity = label; break; } }
-
     const sm = styleRe.exec(inner);
     const styleTag = sm ? `<styleUrl>${sm[1]}</styleUrl>` : "";
-    const depthData = `<ExtendedData><Data name="_3dDepth"><value>true</value></Data><Data name="source"><value>${commodity}</value></Data></ExtendedData>`;
+    const depthData = `<ExtendedData><Data name="_3dDepth"><value>true</value></Data></ExtendedData>`;
 
     const c = [
       [lon - HALF_LON, lat - HALF_LAT],
@@ -107,15 +97,10 @@ function transformKmlFor3D(kml: string): string {
     const topFace = c.map(([lo, la]) => f(lo, la, -topM)).join(" ") + " " + f(c[0][0], c[0][1], -topM);
     const botFace = c.map(([lo, la]) => f(lo, la, -botM)).join(" ") + " " + f(c[0][0], c[0][1], -botM);
 
-    // Build separate wall Placemarks (one per edge)
-    const wallPms = [[0,1],[1,2],[2,3],[3,0]].map(([i,j], idx) =>
-      `<Placemark>
-<name>${baseName} min depth polygon wall ${idx + 1}</name>
-${depthData}
-<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${
+    const sides = [[0,1],[1,2],[2,3],[3,0]].map(([i,j]) =>
+      `<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${
         f(c[i][0],c[i][1],-topM)} ${f(c[j][0],c[j][1],-topM)} ${f(c[j][0],c[j][1],-botM)} ${f(c[i][0],c[i][1],-botM)} ${f(c[i][0],c[i][1],-topM)
-      }</coordinates></LinearRing></outerBoundaryIs></Polygon>
-</Placemark>`
+      }</coordinates></LinearRing></outerBoundaryIs></Polygon>`
     ).join("\n");
 
     count++;
@@ -133,16 +118,14 @@ ${depthData}
 <Point><altitudeMode>relativeToGround</altitudeMode><coordinates>${lon},${lat},${-botM}</coordinates></Point>
 </Placemark>
 <Placemark>
-<name>${baseName} min depth polygon</name>
+<name>${baseName}/ ${dm[1]}-${dm[2]}${uLabel}</name>
 ${depthData}
-<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${topFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
-</Placemark>
-<Placemark>
-<name>${baseName} max depth polygon</name>
-${depthData}
-<Polygon><tessellate>0</tessellate><extrude>0</extrude><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${botFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
-</Placemark>
-${wallPms}`;
+<MultiGeometry>
+<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${topFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+<Polygon><altitudeMode>relativeToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${botFace}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+${sides}
+</MultiGeometry>
+</Placemark>`;
   });
 
   console.log(`[3D Transform] Converted ${count} depth placemarks`);
@@ -153,7 +136,7 @@ export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { setSummary, user } = useGeoData();
+  const { setSummary } = useGeoData();
 
   useEffect(() => {
     const rootNode = rootRef.current;
@@ -175,13 +158,6 @@ export default function CesiumKMZ() {
     let viewer: any;
 
     const onResize = () => viewer?.scene && viewer.resize();
-
-    // Log page visit (fire-and-forget)
-    fetch("/api/log", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "/" }),
-    }).catch(() => {});
 
     function initWhenReady() {
       const Cesium = (window as any).Cesium;
@@ -208,7 +184,6 @@ export default function CesiumKMZ() {
       viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
       viewer.scene.globe.translucency.enabled = true;
       viewer.scene.globe.translucency.frontFaceAlpha = 0.4;
-      viewer.scene.globe.depthTestAgainstTerrain = false;
 
       setTimeout(() => viewer.resize(), 0);
       window.addEventListener("resize", onResize);
@@ -313,35 +288,6 @@ ${rows.join("")}
         Gas: Cesium.Color.fromBytes(110, 168, 163, 255),
         Void: Cesium.Color.fromBytes(123, 225, 52, 255),
       };
-
-      // Map commodity names (from ExtendedData.source) → colors
-      const COMMODITY_COLOR: Record<string, any> = {
-        Copper:           Cesium.Color.fromBytes(184, 115, 51, 255),
-        Gold:             Cesium.Color.fromBytes(255, 215, 0, 255),
-        Silver:           Cesium.Color.fromBytes(192, 192, 192, 255),
-        Lithium:          Cesium.Color.fromBytes(200, 230, 255, 255),
-        "Oil & Gas":      Cesium.Color.fromBytes(40, 40, 40, 255),
-        "Ground Water":   Cesium.Color.fromBytes(74, 134, 255, 255),
-        "Buried Treasure": Cesium.Color.fromBytes(218, 165, 32, 255),
-        "Ship Wrecks":    Cesium.Color.fromBytes(139, 90, 43, 255),
-        Explosives:       Cesium.Color.fromBytes(255, 60, 60, 255),
-        "Ancient Ruins":  Cesium.Color.fromBytes(180, 160, 120, 255),
-        Graphite:         Cesium.Color.fromBytes(64, 64, 64, 255),
-        Ruthenium:        Cesium.Color.fromBytes(160, 180, 200, 255),
-      };
-      // Also map folder shorthand to the same
-      COMMODITY_COLOR.Cu = COMMODITY_COLOR.Copper;
-      COMMODITY_COLOR.Au = COMMODITY_COLOR.Gold;
-      COMMODITY_COLOR.Ag = COMMODITY_COLOR.Silver;
-      COMMODITY_COLOR.Li = COMMODITY_COLOR.Lithium;
-      COMMODITY_COLOR.Oil = COMMODITY_COLOR["Oil & Gas"];
-      COMMODITY_COLOR.H2O = COMMODITY_COLOR["Ground Water"];
-      COMMODITY_COLOR.Gas = Cesium.Color.fromBytes(110, 168, 163, 255);
-      COMMODITY_COLOR.Void = Cesium.Color.fromBytes(123, 225, 52, 255);
-      COMMODITY_COLOR.Graphene = COMMODITY_COLOR.Graphite;
-      COMMODITY_COLOR.Ru = COMMODITY_COLOR.Ruthenium;
-
-      const DEPOSIT_ALPHA = 0.35;
       const COLUMN_COLOR = Cesium.Color.MAGENTA.withAlpha(0.92);
 
       let ds: any = null;
@@ -419,42 +365,11 @@ ${rows.join("")}
       function is3dDepth(e: any): boolean {
         const chk = (o: any) => {
           try {
-            const p = o?.properties;
-            const v = p?._3dDepth ?? p?._3dDeposit;
+            const v = o?.properties?._3dDepth;
             return v && String(typeof v.getValue === "function" ? v.getValue() : v) === "true";
           } catch { return false; }
         };
-        // Walk up the full parent chain (MultiGeometry can nest 2-3 levels)
-        let node = e;
-        for (let i = 0; i < 5 && node; i++) {
-          if (chk(node)) return true;
-          node = node.parent;
-        }
-        // Also check entity name patterns (separate Placemark naming convention)
-        const n = (e.name || e.parent?.name || "").toLowerCase();
-        return /deposit\s*volume|depth\s*column|min depth polygon|max depth polygon/i.test(n);
-      }
-
-      // Resolve commodity color by walking up the entity hierarchy
-      function resolveDepositColor(e: any): any {
-        // Walk parent chain looking for source property
-        let node = e;
-        for (let i = 0; i < 5 && node; i++) {
-          try {
-            const src = node.properties?.source;
-            const srcVal = src ? String(typeof src.getValue === "function" ? src.getValue() : src) : "";
-            if (srcVal && COMMODITY_COLOR[srcVal]) return COMMODITY_COLOR[srcVal];
-          } catch { /* skip */ }
-          // Check folder name
-          const fname = node.name || "";
-          for (const [key, col] of Object.entries(COMMODITY_COLOR)) {
-            if (fname === key || new RegExp(`\\b${key}\\b`, "i").test(fname)) return col;
-          }
-          // Also match the folder color keys directly
-          if (FOLDER_COLOR[fname]) return FOLDER_COLOR[fname];
-          node = node.parent;
-        }
-        return null;
+        return chk(e) || chk(e?.parent);
       }
 
       function drapePolygonToGround(pg: any, owner?: any) {
@@ -656,18 +571,7 @@ ${rows.join("")}
 
         for (const e of ds.entities.values) {
           if (e.polygon) {
-            if (is3dDepth(e)) {
-              // Preserve 3D volume geometry — force per-position heights
-              e.polygon.perPositionHeight = true;
-              e.polygon.heightReference = Cesium.HeightReference.NONE;
-
-              // Color by commodity with transparency so we can see through
-              const depColor = resolveDepositColor(e) || Cesium.Color.MAGENTA;
-              e.polygon.material = depColor.withAlpha(DEPOSIT_ALPHA);
-              e.polygon.outline = true;
-              e.polygon.outlineColor = depColor.withAlpha(0.8);
-              continue;
-            }
+            if (is3dDepth(e)) continue;
             const hasExtruded =
               e.polygon.extrudedHeight &&
               (e.polygon.extrudedHeight.getValue?.(now) ?? e.polygon.extrudedHeight) !== undefined;
@@ -749,21 +653,11 @@ ${rows.join("")}
         }
 
         const bs = Cesium.BoundingSphere.fromPoints(pts);
-
-        // Compute center on the surface (ignore underground skew)
-        const centerCart = Cesium.Cartographic.fromCartesian(bs.center);
-        centerCart.height = 0; // project to ground level
-        const surfaceCenter = Cesium.Cartesian3.fromRadians(
-          centerCart.longitude, centerCart.latitude, 0
-        );
-        const surfaceBs = new Cesium.BoundingSphere(surfaceCenter, bs.radius);
-
         const clearMult = 0.65;
-        const range = Math.max(10, surfaceBs.radius * (1 + clearMult));
+        const range = Math.max(10, bs.radius * (1 + clearMult));
 
-        // Look straight down at center of the area
-        const offset = new Cesium.HeadingPitchRange(0.0, -Math.PI / 2, range);
-        await viewer.camera.flyToBoundingSphere(surfaceBs, {
+        const offset = new Cesium.HeadingPitchRange(0.0, -0.35, range);
+        await viewer.camera.flyToBoundingSphere(bs, {
           offset,
           duration: 1.2,
         });
@@ -868,66 +762,36 @@ ${rows.join("")}
           if (statusEl) statusEl.textContent = msg;
         };
 
-        const loadServerKml = async (kmlText: string, sourceName: string) => {
-          // Parse and load the server-processed KML the same way client-side works
-          const xml = new DOMParser().parseFromString(kmlText, "application/xml");
-          await loadKmlXml(xml, sourceName);
-        };
-
         try {
-          if (name.endsWith(".kml") || name.endsWith(".kmz")) {
-            // Server-side 3D transform via kmz-converter
-            setStatus("Uploading & converting to 3D (DEM elevations)…");
-            const form = new FormData();
-            form.append("file", file);
-            // Attach userId if a registered user is logged in
-            const rootEl = document.getElementById("cesiumContainer")?.parentElement;
-            const uid = rootEl?.dataset?.userId || "";
-            if (uid) form.append("userId", uid);
+          if (name.endsWith(".kml")) {
+            const txt = await readAsText(file);
+            const txt3d = transformKmlFor3D(txt);
+            const xml = new DOMParser().parseFromString(txt3d, "application/xml");
+            await loadKmlXml(xml, file.name);
+            return;
+          }
 
-            let serverOk = false;
-            try {
-              const controller = new AbortController();
-              const timeout = setTimeout(() => controller.abort(), 120000); // 2 min max
-              const resp = await fetch("/api/convert3d", { method: "POST", body: form, signal: controller.signal });
-              clearTimeout(timeout);
-              if (resp.ok) {
-                const kmlText = await resp.text();
-                console.log("[3D Convert] Server returned", kmlText.length, "chars of KML");
-
-                setStatus("Loading 3D data into viewer…");
-                await loadServerKml(kmlText, file.name);
-                setStatus("3D conversion complete ✓");
-                serverOk = true;
-              } else {
-                const errBody = await resp.json().catch(() => ({ error: "unknown" }));
-                console.warn("[3D Convert] Server error:", resp.status, errBody.error);
-                setStatus("Server transform failed – using client fallback…");
-              }
-            } catch (networkErr) {
-              console.warn("[3D Convert] Network error, falling back to client transform:", networkErr);
-              setStatus("Server unreachable – using client fallback…");
+          if (name.endsWith(".kmz")) {
+            const JSZip = await waitForGlobal("JSZip", 8000);
+            if (!JSZip) {
+              console.error("[KMZ] JSZip not available");
+              return;
             }
 
-            // Fallback: client-side regex transform
-            if (!serverOk) {
-              let kmlText: string;
-              if (name.endsWith(".kmz")) {
-                const JSZipLib = await waitForGlobal("JSZip", 8000);
-                if (!JSZipLib) { console.error("[KMZ] JSZip not available"); return; }
-                const ab = await readAsArrayBuffer(file);
-                const zip = await JSZipLib.loadAsync(ab);
-                const kmlPath = Object.keys(zip.files).find((p: string) => p.toLowerCase().endsWith(".kml")) || "";
-                if (!kmlPath) { console.error("[KMZ] No .kml found inside KMZ"); return; }
-                kmlText = await zip.file(kmlPath).async("text");
-              } else {
-                kmlText = await readAsText(file);
-              }
-              const kml3d = transformKmlFor3D(kmlText);
-              const xml = new DOMParser().parseFromString(kml3d, "application/xml");
-              await loadKmlXml(xml, file.name);
-              setStatus("Loaded (client-side 3D fallback)");
+            const ab = await readAsArrayBuffer(file);
+            const zip = await JSZip.loadAsync(ab);
+
+            const kmlPath = Object.keys(zip.files).find((p) => p.toLowerCase().endsWith(".kml")) || "";
+
+            if (!kmlPath) {
+              console.error("[KMZ] No .kml found inside KMZ");
+              return;
             }
+
+            const kmlText = await zip.file(kmlPath).async("text");
+            const kml3d = transformKmlFor3D(kmlText);
+            const xml = new DOMParser().parseFromString(kml3d, "application/xml");
+            await loadKmlXml(xml, kmlPath);
             return;
           }
 
@@ -947,7 +811,6 @@ ${rows.join("")}
           if (btnLoad) btnLoad.disabled = false;
         } catch (err) {
           console.error("[KMZ] load failed:", err);
-          setStatus("Load failed – see console");
         }
       }
 
@@ -1092,62 +955,47 @@ ${rows.join("")}
         const RADIUS = (PAD - KN) / 2;
         const BASE_DEAD = 0.08;
         const BASE_DAMP = 0.22;
-        const BASE_STRAFE = 6.0;
+        const BASE_STRAFE = 18.0;
 
         const js = () => (window as any).__joystickSettings || {};
         const getDead = () => js().deadZone ?? BASE_DEAD;
         const getDamp = () => js().damping ?? BASE_DAMP;
         const clampDead = (v: number) => (Math.abs(v) < getDead() ? 0 : v);
 
-        const ORBIT: { pivot: any; range: number; heading: number; pitch: number } = {
+        const ORBIT: { pivot: any; range: number } = {
           pivot: null,
           range: 1000,
-          heading: 0,
-          pitch: Cesium.Math.toRadians(-30),
         };
 
         function getScreenCenterPivot() {
           const s = viewer.scene;
           const c = viewer.camera;
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(c.positionWC);
-          const isUnderground = carto && carto.height < 0;
-
-          // When underground, globe.pick won't work reliably — use a point
-          // ahead of the camera at a reasonable distance
-          if (!isUnderground) {
-            const center = new Cesium.Cartesian2(s.drawingBufferWidth / 2, s.drawingBufferHeight / 2);
-            const ray = c.getPickRay(center);
-            const hit = Cesium.defined(ray) ? s.globe.pick(ray, s) : null;
-            if (hit) return hit;
+          const underground = carto && carto.height < 0;
+          const center = new Cesium.Cartesian2(s.drawingBufferWidth / 2, s.drawingBufferHeight / 2);
+          const ray = c.getPickRay(center);
+          let hit = (!underground && Cesium.defined(ray)) ? s.globe.pick(ray, s) : null;
+          if (!hit) {
+            const dist = underground
+              ? Math.max(50, Math.abs(carto?.height ?? 500))
+              : Math.max(50, carto?.height || 500);
+            const ahead = Cesium.Cartesian3.add(
+              c.positionWC,
+              Cesium.Cartesian3.multiplyByScalar(
+                Cesium.Cartesian3.normalize(c.directionWC, new Cesium.Cartesian3()),
+                dist,
+              ),
+              new Cesium.Cartesian3(),
+            );
+            hit = ahead;
           }
-
-          // Fallback: project ahead from camera position
-          // Cap distance to avoid a pivot thousands of meters away when deep underground
-          const dist = Math.min(300, Math.max(50, Math.abs(carto?.height || 500)));
-          const ahead = Cesium.Cartesian3.add(
-            c.positionWC,
-            Cesium.Cartesian3.multiplyByScalar(
-              Cesium.Cartesian3.normalize(c.directionWC, new Cesium.Cartesian3()),
-              dist,
-            ),
-            new Cesium.Cartesian3(),
-          );
-          return ahead;
-        }
-
-        function isUnderground() {
-          const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          return carto && carto.height < -5;
+          return hit;
         }
 
         function ensureOrbitTarget() {
-          // When underground, always refresh the pivot so it doesn't get stale/distant
-          if (!ORBIT.pivot || isUnderground()) {
+          if (!ORBIT.pivot) {
             ORBIT.pivot = getScreenCenterPivot();
-            // Use the real distance so the camera doesn't jump on first frame
             ORBIT.range = Cesium.Cartesian3.distance(viewer.camera.positionWC, ORBIT.pivot);
-            ORBIT.heading = viewer.camera.heading;
-            ORBIT.pitch = viewer.camera.pitch;
           }
         }
 
@@ -1179,22 +1027,20 @@ ${rows.join("")}
 
         function camHeightMeters() {
           const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(viewer.camera.positionWC);
-          // Use absolute height so underground scales stay reasonable
-          return carto ? Math.max(1, Math.abs(carto.height) || 1) : 1;
+          return carto ? Math.abs(carto.height || 0) : 0;
         }
 
         function joystickScales() {
-          const h = Math.max(1, camHeightMeters());
+          const h = camHeightMeters();
           const hk = Math.max(1, h / 1000);
-          const moveScale = Cesium.Math.clamp(hk, 0.1, 80);
-          const zoomStep = Cesium.Math.clamp(h * 0.008, 1, 2000);
+          const moveScale = Cesium.Math.clamp(hk, 0.2, 200);
+          const zoomStep = Cesium.Math.clamp(h * 0.02, 2, 5000);
           return { moveScale, zoomStep };
         }
 
         function hook(stick: any, which: "left" | "right") {
           const { pad, knob } = stick;
           let snapBackId: number | null = null;
-          let activePointerId: number | null = null;
 
           const center = () => {
             knob.style.left = `${PAD / 2 - KN / 2}px`;
@@ -1250,15 +1096,7 @@ ${rows.join("")}
             }, 16);
           };
 
-          const forceRelease = () => {
-            activePointerId = null;
-            state[which].active = false;
-            startSnapBack();
-          };
-
           function start(e: any) {
-            if (activePointerId != null) return;
-            activePointerId = e.pointerId ?? null;
             state[which].active = true;
             stopSnapBack();
             e.stopPropagation?.();
@@ -1275,7 +1113,6 @@ ${rows.join("")}
 
           function move(e: any) {
             if (!state[which].active) return;
-            if (e.pointerId != null && activePointerId != null && e.pointerId !== activePointerId) return;
             e.stopPropagation?.();
             const p = local(e);
             const c = clamp(p.x, p.y);
@@ -1285,36 +1122,28 @@ ${rows.join("")}
             e.preventDefault();
           }
 
-          function end(e?: any) {
-            if (e?.pointerId != null && activePointerId != null && e.pointerId !== activePointerId) return;
-            activePointerId = null;
+          function end() {
             state[which].active = false;
             startSnapBack();
           }
 
           pad.addEventListener("pointerdown", start);
-          pad.addEventListener("lostpointercapture", () => forceRelease());
           window.addEventListener("pointermove", move);
           window.addEventListener("pointerup", end);
           window.addEventListener("pointercancel", end);
 
-          pad.addEventListener("touchstart", (e: any) => {
-            if (state[which].active) return;
-            start(e);
-          }, { passive: false });
+          pad.addEventListener("touchstart", start, {
+            passive: false,
+          });
           window.addEventListener("touchmove", move, {
             passive: false,
           });
-          window.addEventListener("touchend", () => {
-            if (activePointerId == null) end();
-          });
-          window.addEventListener("touchcancel", () => {
-            if (activePointerId == null) end();
-          });
+          window.addEventListener("touchend", end);
+          window.addEventListener("touchcancel", end);
 
-          window.addEventListener("blur", () => forceRelease());
+          window.addEventListener("blur", end);
           document.addEventListener("visibilitychange", () => {
-            if (document.hidden) forceRelease();
+            if (document.hidden) end();
           });
         }
 
@@ -1355,7 +1184,6 @@ ${rows.join("")}
               state.right.active = false;
               state.right.x = 0;
               state.right.y = 0;
-              resetOrbitState();
             }
             dragging = null;
           };
@@ -1442,13 +1270,6 @@ ${rows.join("")}
         function driveOnce() {
           let moved = false;
           let movedLeft = false;
-
-          // Guard: if camera is underground and an orbit transform is active,
-          // release it immediately to prevent the stuck-joystick issue.
-          if (isUnderground() && ORBIT.pivot) {
-            resetOrbitState();
-          }
-
           const { moveScale, zoomStep } = joystickScales();
 
           if (state.left.active || state.left.x || state.left.y) {
@@ -1457,9 +1278,7 @@ ${rows.join("")}
 
             if (x) {
               const mSpeed = js().moveSpeed ?? 1.0;
-              // Quadratic curve: small deflections = fine control, full push = fast
-              const ax = Math.abs(x);
-              const m = BASE_STRAFE * moveScale * ax * ax * mSpeed;
+              const m = BASE_STRAFE * moveScale * Math.abs(x) * mSpeed;
               if (x < 0) viewer.camera.moveLeft(m);
               else viewer.camera.moveRight(m);
               moved = true;
@@ -1468,8 +1287,7 @@ ${rows.join("")}
 
             if (y) {
               const zSpeed = js().zoomSpeed ?? 1.0;
-              const ay = Math.abs(y);
-              const z = zoomStep * ay * ay * zSpeed;
+              const z = zoomStep * Math.abs(y) * zSpeed;
               if (y < 0) viewer.camera.zoomIn(z);
               else viewer.camera.zoomOut(z);
               ORBIT.range = Math.max(5, ORBIT.range + (y < 0 ? -z : z));
@@ -1488,73 +1306,26 @@ ${rows.join("")}
           }
 
           if (state.right.active || state.right.x || state.right.y) {
+            ensureOrbitTarget();
             const x = clampDead(state.right.x);
             const y = clampDead(state.right.y);
 
             if (x || y) {
-              const underground = isUnderground();
+              const rot = rotationScaleFromHeight();
+              const rSpeed = js().rotateSpeed ?? 1.0;
+              const YAW_SPEED = 0.008 * rSpeed;
+              const PITCH_SPEED = 0.008 * rSpeed;
               const invertY = js().invertY ?? false;
-              const adjustedY = invertY ? -y : y;
 
-              // When underground, orbit mode (lookAt) can trap the camera because
-              // globe.pick fails and the synthetic pivot creates degenerate orbits.
-              // Use direct camera rotation + vertical movement instead.
-              if (underground) {
-                try {
-                  viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-                } catch { /* noop */ }
-                clearOrbitTarget();
+              const dh = -x * YAW_SPEED * rot;
+              const dp = (invertY ? -y : y) * PITCH_SPEED * rot;
 
-                const rSpeed = js().rotateSpeed ?? 1.0;
+              const c = viewer.camera;
+              const heading = c.heading + dh;
+              const pitch = clampPitch(c.pitch + dp);
 
-                // Spin (yaw)
-                if (x) {
-                  const dh = -x * 0.008 * rSpeed;
-                  viewer.camera.setView({
-                    orientation: {
-                      heading: viewer.camera.heading + dh,
-                      pitch: viewer.camera.pitch,
-                      roll: viewer.camera.roll,
-                    },
-                  });
-                }
-
-                // Flight Up / Down — always allow vertical movement underground
-                if (adjustedY) {
-                  const lift = -adjustedY * 60;
-                  if (lift > 0) {
-                    viewer.camera.moveUp(lift);
-                  } else {
-                    // Allow going deeper but with a gentle pitch shift too
-                    viewer.camera.moveDown(-lift * 0.5);
-                    const dp = adjustedY * 0.006 * rSpeed;
-                    viewer.camera.setView({
-                      orientation: {
-                        heading: viewer.camera.heading,
-                        pitch: clampPitch(viewer.camera.pitch + dp),
-                        roll: viewer.camera.roll,
-                      },
-                    });
-                  }
-                }
-
-                moved = true;
-              } else {
-                ensureOrbitTarget();
-                const rot = rotationScaleFromHeight();
-                const rSpeed = js().rotateSpeed ?? 1.0;
-                const YAW_SPEED = 0.008 * rSpeed;
-                const PITCH_SPEED = 0.008 * rSpeed;
-
-                const dh = -x * YAW_SPEED * rot;
-                const dp = adjustedY * PITCH_SPEED * rot;
-
-                ORBIT.heading = ORBIT.heading + dh;
-                ORBIT.pitch = clampPitch(ORBIT.pitch + dp);
-
-                viewer.camera.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(ORBIT.heading, ORBIT.pitch, ORBIT.range));
-                moved = true;
-              }
+              c.lookAt(ORBIT.pivot, new Cesium.HeadingPitchRange(heading, pitch, ORBIT.range));
+              moved = true;
             }
           }
 
@@ -1574,12 +1345,6 @@ ${rows.join("")}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setSummary]);
-
-  // Keep userId in sync on the root element so the inline upload handler can read it
-  useEffect(() => {
-    const el = rootRef.current;
-    if (el) el.dataset.userId = user?.id || "";
-  }, [user]);
 
   return (
     <div ref={rootRef} style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -1768,12 +1533,6 @@ ${rows.join("")}
                 </details>
               </td>
             </tr>
-
-            <tr>
-              <td>
-                <AccountSection />
-              </td>
-            </tr>
           </tbody>
         </table>
       </div>
@@ -1820,171 +1579,5 @@ function LegendLine({ label, dashed, under }: { label: string; dashed?: boolean;
       </svg>
       <span>{label}</span>
     </div>
-  );
-}
-
-/* ── Account Section (inline in toolbar) ─────────────────────── */
-
-type HistoryItem = {
-  id: string;
-  fileName: string;
-  blobUrl: string;
-  blobSize: number;
-  createdAt: string;
-};
-
-function AccountSection() {
-  const { user, setUser } = useGeoData();
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [company, setCompany] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [histLoading, setHistLoading] = useState(false);
-
-  const reset = () => {
-    setEmail(""); setPassword(""); setFirstName(""); setLastName(""); setCompany(""); setError("");
-  };
-
-  const handleLogin = async () => {
-    setError(""); setLoading(true);
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Login failed"); return; }
-      setUser(data.user as UserInfo);
-      reset();
-    } catch { setError("Network error"); }
-    finally { setLoading(false); }
-  };
-
-  const handleRegister = async () => {
-    setError(""); setLoading(true);
-    try {
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, firstName, lastName, company }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Registration failed"); return; }
-      setUser(data.user as UserInfo);
-      reset();
-    } catch { setError("Network error"); }
-    finally { setLoading(false); }
-  };
-
-  const loadHistory = useCallback(async () => {
-    if (!user) return;
-    setHistLoading(true);
-    try {
-      const res = await fetch(`/api/uploads?userId=${encodeURIComponent(user.id)}`);
-      if (res.ok) { const d = await res.json(); setHistory(d.uploads || []); }
-    } catch { /* ignore */ }
-    setHistLoading(false);
-  }, [user]);
-
-  const logout = () => { setUser(null); reset(); setHistory([]); };
-
-  const inputSt: React.CSSProperties = {
-    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(137,168,201,0.2)",
-    borderRadius: 4, color: "#e7eef8", padding: "5px 7px", fontSize: 11,
-    fontFamily: "system-ui", width: "100%", outline: "none",
-  };
-
-  const btnSt: React.CSSProperties = {
-    background: "#2ea8ff", border: "none", borderRadius: 4,
-    color: "#fff", padding: "5px 0", cursor: "pointer", fontSize: 11,
-    fontFamily: "system-ui", width: "100%",
-  };
-
-  return (
-    <details style={{ marginTop: 2 }}>
-      <summary
-        style={{
-          fontSize: 10, color: "#888", textTransform: "uppercase",
-          letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0",
-        }}
-      >
-        👤 Account
-      </summary>
-      <div style={{ paddingTop: 6-0, display: "flex", flexDirection: "column", gap: 6 }}>
-        {user ? (
-          <>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, color: "#ccc" }}>
-                {user.firstName} {user.lastName}
-              </span>
-              <button onClick={logout} style={{ background: "none", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: "#888", fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>
-                Logout
-              </button>
-            </div>
-
-            {/* Upload history */}
-            <details onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) loadHistory(); }}>
-              <summary style={{ fontSize: 10, color: "#888", cursor: "pointer", userSelect: "none", padding: "2px 0" }}>
-                📁 My Uploads
-              </summary>
-              <div style={{ maxHeight: 160, overflowY: "auto", marginTop: 4 }}>
-                {histLoading && <p style={{ color: "#888", fontSize: 11, margin: 0 }}>Loading…</p>}
-                {!histLoading && !history.length && <p style={{ color: "#888", fontSize: 11, margin: 0 }}>No uploads yet</p>}
-                {history.map((it) => (
-                  <div key={it.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#ccc" }}>{it.fileName}</div>
-                      <div style={{ fontSize: 9, color: "#666" }}>{new Date(it.createdAt).toLocaleDateString()} · {(it.blobSize / 1024).toFixed(0)} KB</div>
-                    </div>
-                    <a href={it.blobUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2ea8ff", fontSize: 12, textDecoration: "none" }}>⬇</a>
-                  </div>
-                ))}
-              </div>
-            </details>
-
-            {/* Admin link */}
-            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
-              🔒 Admin Panel
-            </a>
-          </>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 4, marginBottom: 2 }}>
-              <button onClick={() => { setMode("login"); setError(""); }} style={{ flex: 1, background: mode === "login" ? "#2ea8ff" : "transparent", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: mode === "login" ? "#fff" : "#888", fontSize: 10, padding: "3px 0", cursor: "pointer" }}>Login</button>
-              <button onClick={() => { setMode("register"); setError(""); }} style={{ flex: 1, background: mode === "register" ? "#2ea8ff" : "transparent", border: "1px solid rgba(137,168,201,0.2)", borderRadius: 4, color: mode === "register" ? "#fff" : "#888", fontSize: 10, padding: "3px 0", cursor: "pointer" }}>Register</button>
-            </div>
-            {mode === "register" && (
-              <>
-                <input placeholder="First name *" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputSt} />
-                <input placeholder="Last name *" value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputSt} />
-                <input placeholder="Company" value={company} onChange={(e) => setCompany(e.target.value)} style={inputSt} />
-              </>
-            )}
-            <input placeholder="Email *" type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputSt} />
-            <input
-              placeholder="Password *" type="password" value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && (mode === "login" ? handleLogin() : handleRegister())}
-              style={inputSt}
-            />
-            <button onClick={mode === "login" ? handleLogin : handleRegister} disabled={loading} style={btnSt}>
-              {loading ? "…" : mode === "login" ? "Login" : "Create Account"}
-            </button>
-            {error && <p style={{ color: "#f66", margin: 0, fontSize: 11 }}>{error}</p>}
-
-            {/* Admin link available even when logged out */}
-            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
-              🔒 Admin Panel
-            </a>
-          </>
-        )}
-      </div>
-    </details>
   );
 }

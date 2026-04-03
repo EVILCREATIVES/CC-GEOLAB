@@ -10,8 +10,8 @@ type Message = {
 
 const starterPrompts = [
   "What is AMRT and how does it detect subsurface resources?",
-  "How do I use this platform? Walk me through the controls.",
-  "Analyze the loaded data and rank targets by confidence.",
+  "Analyze the loaded data and rank targets by discovery confidence.",
+  "What do the depth ranges and signatures suggest for drill validation?",
 ];
 
 function RobotIcon({ size = 24 }: { size?: number }) {
@@ -195,10 +195,6 @@ export default function HelpPanel() {
         </button>
       </div>
 
-      {/* Disclaimer: AI analysis notice */}
-      <div style={{ background: "#222", color: "#ffb347", fontSize: 12, padding: "8px 12px", borderRadius: 8, margin: "8px 0", border: "1px solid #444", textAlign: "center" }}>
-        <strong>Disclaimer:</strong> All analyses and answers are AI-generated and may contain errors or inaccuracies. Always verify results with a qualified expert before making decisions.
-      </div>
       {summary && (
         <div style={{ padding: "6px 14px", borderBottom: "1px solid var(--line)", fontSize: 11, color: "var(--accent)", display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
@@ -210,11 +206,30 @@ export default function HelpPanel() {
         style={{
           padding: "10px 12px",
           display: "flex",
-          flexDirection: "column",
-          gap: 6,
+          gap: 8,
+          flexWrap: "wrap",
           borderBottom: "1px solid var(--line)",
         }}
       >
+        {starterPrompts.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            onClick={() => submitText(prompt)}
+            disabled={loading}
+            style={{
+              border: "1px solid var(--line)",
+              borderRadius: 999,
+              background: "rgba(33, 56, 87, 0.55)",
+              color: "var(--text)",
+              cursor: loading ? "not-allowed" : "pointer",
+              fontSize: 11,
+              padding: "5px 10px",
+            }}
+          >
+            {prompt}
+          </button>
+        ))}
       </div>
 
       <div
@@ -231,7 +246,7 @@ export default function HelpPanel() {
       >
         {messages.length === 0 && (
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, exploration targets, or how to use this platform.
+            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, or exploration targets.
           </div>
         )}
 
@@ -262,7 +277,7 @@ export default function HelpPanel() {
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about AMRT analysis, platform features, controls..."
+          placeholder="Ask about AMRT analysis, subsurface targets, depth models..."
           rows={3}
           style={{
             width: "100%",
