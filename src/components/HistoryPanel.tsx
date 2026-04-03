@@ -3,18 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useGeoData } from "@/context/GeoDataContext";
 
-function useIsMobile(breakpoint = 768) {
-  const [mobile, setMobile] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
-    setMobile(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, [breakpoint]);
-  return mobile;
-}
-
 type HistoryItem = {
   id: string;
   fileName: string;
@@ -25,7 +13,6 @@ type HistoryItem = {
 
 export default function HistoryPanel() {
   const { user } = useGeoData();
-  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,11 +39,11 @@ export default function HistoryPanel() {
 
   return (
     <>
-      <button onClick={() => setOpen(!open)} style={{ ...S.triggerBtn, ...(isMobile ? { bottom: 60, right: 50, width: 34, height: 34, fontSize: 16 } : {}) }} title="Upload History">
+      <button onClick={() => setOpen(!open)} style={S.triggerBtn} title="Upload History">
         📁
       </button>
       {open && (
-        <div style={{ ...S.panel, ...(isMobile ? { bottom: 0, right: 0, left: 0, width: "100%", maxHeight: "60vh", borderRadius: "12px 12px 0 0" } : {}) }}>
+        <div style={S.panel}>
           <div style={S.header}>
             <strong style={{ color: "var(--accent)" }}>My Uploads</strong>
             <button onClick={() => setOpen(false)} style={S.closeBtn}>✕</button>

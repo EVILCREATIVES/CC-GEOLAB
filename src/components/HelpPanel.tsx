@@ -8,6 +8,12 @@ type Message = {
   text: string;
 };
 
+const starterPrompts = [
+  "What is AMRT and how does it detect subsurface resources?",
+  "How do I use this platform? Walk me through the controls.",
+  "Analyze the loaded data and rank targets by confidence.",
+];
+
 function RobotIcon({ size = 24 }: { size?: number }) {
   return (
     <svg
@@ -61,10 +67,6 @@ export default function HelpPanel() {
   const [open, setOpen] = useState(false);
   const { summary } = useGeoData();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [reportMenu, setReportMenu] = useState(false);
-  const [reportPassword, setReportPassword] = useState("");
-  const [reportError, setReportError] = useState("");
-  const [reportLoading, setReportLoading] = useState(false);
 
   // On desktop, default to open; on mobile, default to closed
   useEffect(() => {
@@ -114,46 +116,6 @@ export default function HelpPanel() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await submitText(input);
-  }
-
-  async function downloadReport(format: "docx" | "pdf") {
-    setReportLoading(true);
-    setReportError("");
-    try {
-      const res = await fetch("/api/report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          password: reportPassword,
-          format,
-          fileContext: summary?.llmContext ?? null,
-          chatHistory: messages,
-          fileName: summary?.fileName ?? "AMRT Survey",
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Request failed." }));
-        setReportError(data.error || "Request failed.");
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download =
-        (summary?.fileName?.replace(/[^a-zA-Z0-9 _\-().]/g, "") || "Report") +
-        `_Report.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setReportMenu(false);
-      setReportPassword("");
-    } catch {
-      setReportError("Network error.");
-    } finally {
-      setReportLoading(false);
-    }
   }
 
   if (!open) {
@@ -215,112 +177,45 @@ export default function HelpPanel() {
             CC Explorations — Atomic Mineral Resonance Tomography
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button
-            type="button"
-            onClick={() => { setReportMenu(!reportMenu); setReportError(""); }}
-            aria-label="Download report"
-            title="Download Report"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--muted)",
-              fontSize: 16,
-              cursor: "pointer",
-              padding: "4px 8px",
-              lineHeight: 1,
-            }}
-          >
-            📄
-          </button>
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label="Close assistant"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--muted)",
-              fontSize: 20,
-              cursor: "pointer",
-              padding: "4px 8px",
-              lineHeight: 1,
-            }}
-          >
-            ✕
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          aria-label="Close assistant"
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--muted)",
+            fontSize: 20,
+            cursor: "pointer",
+            padding: "4px 8px",
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
       </div>
 
-      {reportMenu && (
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", background: "rgba(16,24,36,0.6)" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Enter password to generate report</div>
-          <input
-            type="password"
-            placeholder="Password"
-            value={reportPassword}
-            onChange={(e) => setReportPassword(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && reportPassword) downloadReport("docx"); }}
-            style={{
-              width: "100%",
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid var(--line)",
-              borderRadius: 6,
-              color: "var(--text)",
-              padding: "6px 8px",
-              fontSize: 12,
-              outline: "none",
-              marginBottom: 8,
-            }}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              disabled={!reportPassword || reportLoading}
-              onClick={() => downloadReport("docx")}
-              style={{
-                flex: 1,
-                border: "1px solid var(--line)",
-                borderRadius: 6,
-                background: reportPassword && !reportLoading ? "var(--accent)" : "#4b5f76",
-                color: "#001425",
-                padding: "6px 0",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: reportPassword && !reportLoading ? "pointer" : "not-allowed",
-              }}
-            >
-              {reportLoading ? "Generating…" : "DOCX"}
-            </button>
-            <button
-              type="button"
-              disabled={!reportPassword || reportLoading}
-              onClick={() => downloadReport("pdf")}
-              style={{
-                flex: 1,
-                border: "1px solid var(--line)",
-                borderRadius: 6,
-                background: reportPassword && !reportLoading ? "var(--accent)" : "#4b5f76",
-                color: "#001425",
-                padding: "6px 0",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: reportPassword && !reportLoading ? "pointer" : "not-allowed",
-              }}
-            >
-              {reportLoading ? "Generating…" : "PDF"}
-            </button>
-          </div>
-          {reportError && <div style={{ color: "#ff9e9e", fontSize: 11, marginTop: 6 }}>{reportError}</div>}
-        </div>
-      )}
-
+      {/* Disclaimer: AI analysis notice */}
+      <div style={{ background: "#222", color: "#ffb347", fontSize: 12, padding: "8px 12px", borderRadius: 8, margin: "8px 0", border: "1px solid #444", textAlign: "center" }}>
+        <strong>Disclaimer:</strong> All analyses and answers are AI-generated and may contain errors or inaccuracies. Always verify results with a qualified expert before making decisions.
+      </div>
       {summary && (
         <div style={{ padding: "6px 14px", borderBottom: "1px solid var(--line)", fontSize: 11, color: "var(--accent)", display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", flexShrink: 0 }} />
           Analyzing: {summary.fileName} ({summary.entityCount} entities, {summary.folderNames.length} folders)
         </div>
       )}
+
+      <div
+        style={{
+          padding: "10px 12px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          borderBottom: "1px solid var(--line)",
+        }}
+      >
+      </div>
 
       <div
         ref={scrollRef}
@@ -336,7 +231,7 @@ export default function HelpPanel() {
       >
         {messages.length === 0 && (
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, or exploration targets.
+            Ask about AMRT satellite analysis, mineral signatures, subsurface depth models, resource classification, exploration targets, or how to use this platform.
           </div>
         )}
 
@@ -367,7 +262,7 @@ export default function HelpPanel() {
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about AMRT analysis, subsurface targets, depth models..."
+          placeholder="Ask about AMRT analysis, platform features, controls..."
           rows={3}
           style={{
             width: "100%",

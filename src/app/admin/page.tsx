@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import AdminJoystickPresetPanel from "@/components/AdminJoystickPresetPanel";
 
 type Tab = "logs" | "users" | "rules" | "joystick" | "reports";
@@ -53,10 +52,7 @@ export default function AdminPage() {
       <div style={styles.container}>
         <div style={styles.header}>
           <h1 style={{ margin: 0, fontSize: 20, color: "var(--accent)" }}>CC GEOLAB Admin</h1>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Link href="/" style={{ ...styles.btn, background: "#1a3a5c", textDecoration: "none", display: "inline-flex", alignItems: "center" }}>← Back to Map</Link>
-            <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
-          </div>
+          <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
         </div>
         <div style={styles.tabs}>
           {(["logs", "users", "rules", "joystick", "reports"] as Tab[]).map((t) => (

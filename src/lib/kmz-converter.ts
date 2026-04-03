@@ -83,22 +83,44 @@ export function extractDepthRange(name: string, defaultUnit = "m"): [number, num
   if (!name) return null;
   const s = name.trim();
 
-  let m = s.match(/(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))?\s*$/i);
+  // Pattern A: dual slash-separated ranges — "F1a/ 4426-4474/ 5364-5379'"
+  // Returns the envelope (outermost bounds) of both ranges
+  const dualMatch = s.match(
+    /(\d+(?:\.\d+)?)\s*(?:m|ft|'|"|in|inch|inches)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:m|ft|'|"|in|inch|inches)?\s*\/\s*(\d+(?:\.\d+)?)\s*(?:m|ft|'|"|in|inch|inches)?\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))?\s*$/i
+  );
+  if (dualMatch) {
+    const unit = dualMatch[5] || null;
+    const vals = [1, 2, 3, 4].map(i => toMeters(parseFloat(dualMatch[i]), unit, defaultUnit));
+    return [Math.min(...vals), Math.max(...vals)];
+  }
+
+  // Pattern B: range with optional unit per number — "38'-44'", "100-200 ft"
+  let m = s.match(/(\d+(?:\.\d+)?)\s*(m|ft|'|"|in|inch|inches)?\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))?\s*$/i);
   if (m) {
-    const a = toMeters(parseFloat(m[1]), m[3], defaultUnit);
-    const b = toMeters(parseFloat(m[2]), m[3], defaultUnit);
+    const unit = m[4] || m[2] || null;
+    const a = toMeters(parseFloat(m[1]), unit, defaultUnit);
+    const b = toMeters(parseFloat(m[3]), unit, defaultUnit);
     return [Math.min(a, b), Math.max(a, b)];
   }
 
+  // Pattern C: single number with unit at end — "41'", "100 ft"
   m = s.match(/(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))\s*$/i);
   if (m) {
     const v = toMeters(parseFloat(m[1]), m[2], defaultUnit);
     return [v, v];
   }
 
+  // Pattern D: embedded number with unit anywhere — "41' foo"
   m = s.match(/(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))/i);
   if (m) {
     const v = toMeters(parseFloat(m[1]), m[2], defaultUnit);
+    return [v, v];
+  }
+
+  // Pattern E: bare trailing number (only when commodity detected) — "Au3e 41"
+  m = s.match(/\s(\d+(?:\.\d+)?)\s*$/);
+  if (m && whichCommodity(s)) {
+    const v = toMeters(parseFloat(m[1]), null, defaultUnit);
     return [v, v];
   }
 
@@ -106,7 +128,7 @@ export function extractDepthRange(name: string, defaultUnit = "m"): [number, num
 }
 
 // ── Pretty names ───────────────────────────────────────────────
-const RANGE_RE = /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"))?/i;
+const RANGE_RE = /(\d+(?:\.\d+)?)\s*(?:m|ft|'|"|in|inch|inches)?\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s*(m|ft|'|"|in|inch|inches))?/i;
 
 function cleanBase(raw: string): string {
   let s = (raw || "").trim().replace(/[/\\]/g, " ");
@@ -134,16 +156,19 @@ function derivePrettyNames(pmName: string): [string, string, string, string] {
 
 // ── Commodity detection ────────────────────────────────────────
 const COMMODITY_PATTERNS: [RegExp, string][] = [
-  [/\b(Au|Gold)\b/i, "Gold"],
-  [/\b(Cu|Copper)\b/i, "Copper"],
-  [/\b(Li|Lithium)\b/i, "Lithium"],
-  [/\b(Ag|Silver)\b/i, "Silver"],
+  [/\bAu(?:\b|\d)|\bGold\b/i, "Gold"],
+  [/\bCu(?:\b|\d)|\bCopper\b/i, "Copper"],
+  [/\bLi(?:\b|\d)|\bLithium\b/i, "Lithium"],
+  [/\bAg(?:\b|\d)|\bSilver\b/i, "Silver"],
   [/(Oil\s*&?\s*Gas|Oil\s+and\s+Gas|Oil\b|Petroleum|Crude)/i, "Oil & Gas"],
   [/Buried\s*Treasure/i, "Buried Treasure"],
   [/(Ship\s*Wrecks?|Ship\s*Wreck\s*Treasure)/i, "Ship Wrecks"],
-  [/(Ground\s*Water|Water\s*Table)/i, "Ground Water"],
+  [/(H2O|Ground\s*Water|Water\s*Table)/i, "Ground Water"],
   [/Explosives?/i, "Explosives"],
   [/(Ancient\s*Ruins?|Artifacts?)/i, "Ancient Ruins"],
+  [/(Graphite|Graphene)/i, "Graphite"],
+  [/(Ruthenium|\bRu\b)/i, "Ruthenium"],
+  [/\bVoid\b/i, "Void"],
 ];
 
 function whichCommodity(name: string): string | null {
@@ -154,12 +179,39 @@ function whichCommodity(name: string): string | null {
   return null;
 }
 
+/** Walk the placemark's parent Folder chain to resolve commodity from folder names */
+function whichCommodityFromAncestors(el: Element): string | null {
+  let node = el.parentNode as Element | null;
+  while (node) {
+    const localName = node.localName || node.nodeName?.replace(/^.*:/, "");
+    if (localName === "Folder" || localName === "Document") {
+      const nameEl = Array.from(node.childNodes).find(
+        (c: any) => (c.localName || c.nodeName?.replace(/^.*:/, "")) === "name"
+      ) as Element | undefined;
+      if (nameEl?.textContent) {
+        const hit = whichCommodity(nameEl.textContent.trim());
+        if (hit) return hit;
+      }
+    }
+    node = node.parentNode as Element | null;
+  }
+  return null;
+}
+
 function isSurveyArea(name: string): boolean {
   return /\bSurvey\s*Area\b/i.test(name || "");
 }
 
 function isDeposit(name: string): boolean {
   return /\bdeposit\b/i.test(name || "");
+}
+
+/** Any polygon that represents a resource zone (deposit, anomaly, zone, etc.) */
+function isResourcePolygon(name: string): boolean {
+  if (!name) return false;
+  // Match "Deposit", "Res", "Void", commodity names, or common resource polygon naming patterns
+  return /\b(deposit|res|void|zone|anomaly|area|field|reservoir|aquifer|vein|lode|seam|bed|pocket|lens|body|ore\s*body)\b/i.test(name)
+    || whichCommodity(name) !== null;
 }
 
 function shouldSkipVolume(name: string): boolean {
@@ -374,6 +426,78 @@ function createPolygonPm(doc: Document, name: string, outerLlh: Coord3[], holesL
   return pm;
 }
 
+/**
+ * Build a closed 3D volume (MultiGeometry) from a ring of 2D vertices
+ * with a top altitude and bottom altitude.
+ *
+ * Produces: 1 top face + 1 bottom face + N side quads.
+ */
+/**
+ * Create separate Placemarks for a 3D deposit volume:
+ * - 1 top face  ("<name> min depth polygon")
+ * - 1 bottom face ("<name> max depth polygon")
+ * - N wall quads  ("<name> min depth polygon wall 1..N")
+ *
+ * Each is a standalone Placemark (NOT MultiGeometry) so Cesium
+ * correctly preserves per-vertex absolute altitudes.
+ */
+function createDepositVolumePlacemarks(
+  doc: Document,
+  name: string,
+  topRing: Coord3[],
+  bottomRing: Coord3[],
+  altMode = "absolute"
+): Element[] {
+  const out: Element[] = [];
+
+  // Ensure rings are closed
+  function ensureClosed(ring: Coord3[]): Coord3[] {
+    const r = [...ring];
+    const f = r[0], l = r[r.length - 1];
+    if (f[0] !== l[0] || f[1] !== l[1]) r.push([f[0], f[1], f[2]]);
+    return r;
+  }
+  const top = ensureClosed(topRing);
+  const bot = ensureClosed(bottomRing);
+
+  // Helper: create a single Polygon Placemark
+  function polyPm(pmName: string, ring: Coord3[]): Element {
+    const pm = kmlEl(doc, "Placemark");
+    pm.appendChild(kmlEl(doc, "name", pmName));
+    const poly = kmlEl(doc, "Polygon");
+    poly.appendChild(kmlEl(doc, "tessellate", "0"));
+    poly.appendChild(kmlEl(doc, "extrude", "0"));
+    poly.appendChild(kmlEl(doc, "altitudeMode", altMode));
+    const outer = kmlEl(doc, "outerBoundaryIs");
+    const lr = kmlEl(doc, "LinearRing");
+    lr.appendChild(kmlEl(doc, "coordinates", formatCoords(ring)));
+    outer.appendChild(lr);
+    poly.appendChild(outer);
+    pm.appendChild(poly);
+    return pm;
+  }
+
+  // Top face (min depth = shallower = higher altitude)
+  out.push(polyPm(`${name} min depth polygon`, top));
+
+  // Bottom face (max depth = deeper = lower altitude)
+  out.push(polyPm(`${name} max depth polygon`, bot));
+
+  // Side walls — one quad per edge
+  for (let i = 0; i < top.length - 1; i++) {
+    const wallRing: Coord3[] = [
+      [top[i][0], top[i][1], top[i][2]],
+      [top[i + 1][0], top[i + 1][1], top[i + 1][2]],
+      [bot[i + 1][0], bot[i + 1][1], bot[i + 1][2]],
+      [bot[i][0], bot[i][1], bot[i][2]],
+      [top[i][0], top[i][1], top[i][2]], // close
+    ];
+    out.push(polyPm(`${name} min depth polygon wall ${i + 1}`, wallRing));
+  }
+
+  return out;
+}
+
 // ── Survey area clamping ───────────────────────────────────────
 function clampSurveyArea(placemark: Element) {
   for (const tag of ["Point", "LineString", "LinearRing", "Polygon"]) {
@@ -435,11 +559,16 @@ function ringToMinMaxLines(
 }
 
 // ── Core process_kml ───────────────────────────────────────────
+export interface ProcessKmlResult {
+  kml: Buffer;
+  centroid: { lat: number; lon: number; demElev: number } | null;
+}
+
 export async function processKml(
   kmlBytes: Buffer,
   opts: ConvertOptions,
   onProgress?: (msg: string) => void
-): Promise<Buffer> {
+): Promise<ProcessKmlResult> {
   const { mode, offsetM, datumOffsetM, useDepthFromNames, generateVolumePolygons } = opts;
   const demCache = new Map<string, number>();
 
@@ -584,7 +713,7 @@ export async function processKml(
           const zMax = E - Math.abs(maxM);
 
           const [nmSurface, nmMin, nmMax] = derivePrettyNames(pmName);
-          const comm = whichCommodity(pmName);
+          const comm = whichCommodity(pmName) || whichCommodityFromAncestors(placemark) || "";
 
           const folder = kmlEl(doc, "Folder");
           folder.appendChild(kmlEl(doc, "name", `${pmName} – 3D Depths`));
@@ -606,6 +735,25 @@ export async function processKml(
           folder.appendChild(pmSurface);
           folder.appendChild(pmMin);
           folder.appendChild(pmMax);
+
+          // 3D deposit volume box around the point
+          const LON_OFF = 0.0001;
+          const LAT_OFF = 0.000075;
+          const boxVerts: [number, number][] = [
+            [lon - LON_OFF, lat - LAT_OFF],
+            [lon + LON_OFF, lat - LAT_OFF],
+            [lon + LON_OFF, lat + LAT_OFF],
+            [lon - LON_OFF, lat + LAT_OFF],
+          ];
+          const [, , , nmColumn] = derivePrettyNames(pmName);
+          // Per-vertex heights for the box (all same DEM at this single point)
+          const boxTop: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMin]);
+          const boxBot: Coord3[] = boxVerts.map(([lo, la]) => [lo, la, zMax]);
+          const volumePms = createDepositVolumePlacemarks(doc, nmColumn, boxTop, boxBot, "absolute");
+          for (const vp of volumePms) {
+            attachExtendedData(vp, { ...fields, _3dDepth: "true" });
+            folder.appendChild(vp);
+          }
 
           const parent = placemark.parentNode as Element;
           const siblings = Array.from(parent.childNodes);
@@ -675,7 +823,7 @@ export async function processKml(
     const surfaceLlh: Coord3[] = outerCoordsLlh.map(([lon, lat, alt]) => [lon, lat, alt ?? 0] as Coord3);
     const [lon0, lat0] = outerCoordsLlh[0];
     const nd = nearestDepths(lon0, lat0);
-    const commFinal = whichCommodity(pmName) || (nd ? nd[3] : "") || "";
+    const commFinal = whichCommodity(pmName) || (nd ? nd[3] : "") || whichCommodityFromAncestors(placemark) || "";
 
     const parent = placemark.parentNode as Element;
     const siblings = Array.from(parent.childNodes);
@@ -684,6 +832,8 @@ export async function processKml(
     // LINESTRING: min/max depth lines
     if (hasLine) {
       const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
+      // Skip if no actual depth data is available (would produce identical surface-level lines)
+      if (mnAny === 0 && mxAny === 0) continue;
       const baseN = cleanBase(pmName);
       const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
       const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
@@ -695,9 +845,23 @@ export async function processKml(
       continue;
     }
 
-    // POLYGON (deposit): min/max lines only
-    if (hasPoly && (isDeposit(pmName) || shouldSkipVolume(pmName))) {
-      const { minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths);
+    // POLYGON (resource/deposit): 3D closed volume as separate Placemarks + min/max lines
+    if (hasPoly && (isResourcePolygon(pmName) || isDeposit(pmName) || shouldSkipVolume(pmName))) {
+      // Use the polygon's own depth range if present, otherwise fall back to nearestDepths
+      const selfRange = extractDepthRange(pmName);
+      let minLlh: Coord3[], maxLlh: Coord3[], mnAny: number, mxAny: number;
+      if (selfRange) {
+        [mnAny, mxAny] = [selfRange[0], selfRange[1]];
+        minLlh = surfaceLlh.map(([lon, lat, E]) => [lon, lat, E - mnAny] as Coord3);
+        maxLlh = surfaceLlh.map(([lon, lat, E]) => [lon, lat, E - mxAny] as Coord3);
+      } else {
+        ({ minLlh, maxLlh, mnAny, mxAny } = ringToMinMaxLines(surfaceLlh, nearestDepths));
+      }
+
+      // Skip generating depth structures when no depth data is available
+      // (would produce degenerate zero-thickness polygons at surface level)
+      if (mnAny === 0 && mxAny === 0) continue;
+
       const baseN = cleanBase(pmName);
       const pmMin = createLinestringPm(doc, `${baseN} min depth line`, minLlh);
       const pmMax = createLinestringPm(doc, `${baseN} max depth line`, maxLlh);
@@ -706,6 +870,17 @@ export async function processKml(
       attachExtendedData(pmMax, meta);
       toInsert.push({ parent, idx: idx + 1, el: pmMin });
       toInsert.push({ parent, idx: idx + 2, el: pmMax });
+
+      // Build 3D closed volume as separate Placemarks (not MultiGeometry)
+      if (!shouldSkipVolume(pmName)) {
+        const volumePms = createDepositVolumePlacemarks(doc, baseN, minLlh, maxLlh, "absolute");
+        let offset = 3;
+        for (const vp of volumePms) {
+          attachExtendedData(vp, { ...meta, _3dDepth: "true" });
+          toInsert.push({ parent, idx: idx + offset, el: vp });
+          offset++;
+        }
+      }
       continue;
     }
 
@@ -747,14 +922,31 @@ export async function processKml(
     }
   }
 
+  // Compute centroid from DEM cache for geoid correction
+  let centroid: { lat: number; lon: number; demElev: number } | null = null;
+  if (demCache.size > 0) {
+    let sumLat = 0, sumLon = 0, sumElev = 0, count = 0;
+    for (const [key, elev] of demCache) {
+      const [lonStr, latStr] = key.split(",");
+      sumLon += parseFloat(lonStr);
+      sumLat += parseFloat(latStr);
+      sumElev += elev;
+      count++;
+    }
+    centroid = {
+      lat: sumLat / count,
+      lon: sumLon / count,
+      demElev: sumElev / count + datumOffsetM + offsetM,
+    };
+  }
+
   onProgress?.("Serializing KML...");
   const serializer = new XMLSerializer();
   let xmlStr = serializer.serializeToString(doc);
-  // Ensure exactly one XML declaration at the top
-  if (!xmlStr.startsWith("<?xml")) {
-    xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + xmlStr;
-  }
-  return Buffer.from(xmlStr, "utf-8");
+  // Strip any XML declaration produced by the serializer to avoid duplicates
+  xmlStr = xmlStr.replace(/^<\?xml[^?]*\?>\s*/i, "");
+  xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + xmlStr;
+  return { kml: Buffer.from(xmlStr, "utf-8"), centroid };
 }
 
 // ── Main entry point ───────────────────────────────────────────
@@ -776,7 +968,7 @@ export async function convertKmz(
     kmlBytes = inputBuf;
   }
 
-  const outKml = await processKml(kmlBytes, opts, onProgress);
+  const { kml: outKml } = await processKml(kmlBytes, opts, onProgress);
 
   onProgress?.("Re-packing as KMZ...");
   const outKmz = await rezipKmlToKmz(outKml, originalKmz);
