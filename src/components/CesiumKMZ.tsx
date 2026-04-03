@@ -1041,6 +1041,8 @@ ${rows.join("")}
         function hook(stick: any, which: "left" | "right") {
           const { pad, knob } = stick;
           let snapBackId: number | null = null;
+          let activePointerId: number | null = null;
+          let activeTouchId: number | null = null;
 
           const center = () => {
             knob.style.left = `${PAD / 2 - KN / 2}px`;
@@ -1048,13 +1050,20 @@ ${rows.join("")}
           };
           center();
 
-          const local = (e: any) => {
-            const p = e.touches ? e.touches[0] : e;
+          const localFromPoint = (clientX: number, clientY: number) => {
             const r = pad.getBoundingClientRect();
             return {
-              x: p.clientX - (r.left + r.width / 2),
-              y: p.clientY - (r.top + r.height / 2),
+              x: clientX - (r.left + r.width / 2),
+              y: clientY - (r.top + r.height / 2),
             };
+          };
+
+          const findTouch = (e: TouchEvent, id: number | null): Touch | null => {
+            if (id == null) return null;
+            for (let i = 0; i < e.touches.length; i++) {
+              if (e.touches[i].identifier === id) return e.touches[i];
+            }
+            return null;
           };
 
           const clamp = (x: number, y: number) => {
@@ -1096,54 +1105,91 @@ ${rows.join("")}
             }, 16);
           };
 
-          function start(e: any) {
-            state[which].active = true;
-            stopSnapBack();
-            e.stopPropagation?.();
-            if (e.pointerId != null && pad.setPointerCapture) {
-              try {
-                pad.setPointerCapture(e.pointerId);
-              } catch {
-                // noop
-              }
-            }
-            move(e);
-            e.preventDefault();
-          }
-
-          function move(e: any) {
-            if (!state[which].active) return;
-            e.stopPropagation?.();
-            const p = local(e);
+          function applyMove(clientX: number, clientY: number) {
+            const p = localFromPoint(clientX, clientY);
             const c = clamp(p.x, p.y);
             state[which].x = c.x / RADIUS;
             state[which].y = c.y / RADIUS;
             setKnob(c.x, c.y);
-            e.preventDefault();
           }
 
-          function end() {
+          function release() {
             state[which].active = false;
+            activePointerId = null;
+            activeTouchId = null;
             startSnapBack();
           }
 
-          pad.addEventListener("pointerdown", start);
-          window.addEventListener("pointermove", move);
-          window.addEventListener("pointerup", end);
-          window.addEventListener("pointercancel", end);
+          // ── Pointer events (mouse / stylus / single-touch fallback) ──
+          function pointerStart(e: PointerEvent) {
+            if (state[which].active) return; // already tracking a finger
+            state[which].active = true;
+            activePointerId = e.pointerId;
+            stopSnapBack();
+            e.stopPropagation();
+            if (pad.setPointerCapture) {
+              try { pad.setPointerCapture(e.pointerId); } catch { /* noop */ }
+            }
+            applyMove(e.clientX, e.clientY);
+            e.preventDefault();
+          }
 
-          pad.addEventListener("touchstart", start, {
-            passive: false,
-          });
-          window.addEventListener("touchmove", move, {
-            passive: false,
-          });
-          window.addEventListener("touchend", end);
-          window.addEventListener("touchcancel", end);
+          function pointerMove(e: PointerEvent) {
+            if (e.pointerId !== activePointerId) return;
+            e.stopPropagation();
+            applyMove(e.clientX, e.clientY);
+            e.preventDefault();
+          }
 
-          window.addEventListener("blur", end);
+          function pointerEnd(e: PointerEvent) {
+            if (e.pointerId !== activePointerId) return;
+            release();
+          }
+
+          // ── Touch events (multi-touch safe) ──
+          function touchStart(e: TouchEvent) {
+            if (state[which].active) return; // already tracking a finger
+            const touch = e.changedTouches[0];
+            if (!touch) return;
+            state[which].active = true;
+            activeTouchId = touch.identifier;
+            stopSnapBack();
+            e.stopPropagation();
+            applyMove(touch.clientX, touch.clientY);
+            e.preventDefault();
+          }
+
+          function touchMove(e: TouchEvent) {
+            const touch = findTouch(e, activeTouchId);
+            if (!touch) return;
+            e.stopPropagation();
+            applyMove(touch.clientX, touch.clientY);
+            e.preventDefault();
+          }
+
+          function touchEnd(e: TouchEvent) {
+            if (activeTouchId == null) return;
+            for (let i = 0; i < e.changedTouches.length; i++) {
+              if (e.changedTouches[i].identifier === activeTouchId) {
+                release();
+                return;
+              }
+            }
+          }
+
+          pad.addEventListener("pointerdown", pointerStart);
+          window.addEventListener("pointermove", pointerMove);
+          window.addEventListener("pointerup", pointerEnd);
+          window.addEventListener("pointercancel", pointerEnd);
+
+          pad.addEventListener("touchstart", touchStart, { passive: false });
+          window.addEventListener("touchmove", touchMove, { passive: false });
+          window.addEventListener("touchend", touchEnd);
+          window.addEventListener("touchcancel", touchEnd);
+
+          window.addEventListener("blur", release);
           document.addEventListener("visibilitychange", () => {
-            if (document.hidden) end();
+            if (document.hidden) release();
           });
         }
 
