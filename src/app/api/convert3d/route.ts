@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     const kmlBytes = isKmz ? await unzipKmzToKml(inputBuf) : inputBuf;
 
     // Process KML (3D depth structures)
-    const { kml: outKml } = await processKml(kmlBytes, opts, onProgress);
+    const outKml = await processKml(kmlBytes, opts, onProgress);
 
     // Store in Vercel Blob + DB (non-blocking, don't fail the response)
     const { ip, region } = getClientInfo(request);
