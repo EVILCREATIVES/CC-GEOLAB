@@ -1,10 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useGeoData, type UserInfo } from "@/context/GeoDataContext";
+
+function useIsMobile(breakpoint = 768) {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    setMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return mobile;
+}
 
 export default function UserPanel() {
   const { user, setUser } = useGeoData();
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -62,7 +75,7 @@ export default function UserPanel() {
   // Logged-in badge
   if (user) {
     return (
-      <div style={S.badge}>
+      <div style={{ ...S.badge, ...(isMobile ? { bottom: 60, right: 8 } : {}) }}>
         <span style={{ fontSize: 12, color: "var(--muted)" }}>
           {user.firstName} {user.lastName}
         </span>
@@ -73,11 +86,11 @@ export default function UserPanel() {
 
   return (
     <>
-      <button onClick={() => setOpen(!open)} style={S.triggerBtn} title="Login / Register">
+      <button onClick={() => setOpen(!open)} style={{ ...S.triggerBtn, ...(isMobile ? { bottom: 60, right: 8, width: 34, height: 34, fontSize: 16 } : {}) }} title="Login / Register">
         👤
       </button>
       {open && (
-        <div style={S.panel}>
+        <div style={{ ...S.panel, ...(isMobile ? { bottom: 0, right: 0, left: 0, width: "100%", borderRadius: "12px 12px 0 0" } : {}) }}>
           <div style={S.panelHeader}>
             <button onClick={() => { setMode("login"); setError(""); }} style={{ ...S.tabBtn, ...(mode === "login" ? S.tabActive : {}) }}>Login</button>
             <button onClick={() => { setMode("register"); setError(""); }} style={{ ...S.tabBtn, ...(mode === "register" ? S.tabActive : {}) }}>Register</button>
