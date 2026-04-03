@@ -184,6 +184,7 @@ export default function CesiumKMZ() {
       viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
       viewer.scene.globe.translucency.enabled = true;
       viewer.scene.globe.translucency.frontFaceAlpha = 0.4;
+      viewer.scene.globe.depthTestAgainstTerrain = false;
 
       setTimeout(() => viewer.resize(), 0);
       window.addEventListener("resize", onResize);
@@ -369,7 +370,13 @@ ${rows.join("")}
             return v && String(typeof v.getValue === "function" ? v.getValue() : v) === "true";
           } catch { return false; }
         };
-        return chk(e) || chk(e?.parent);
+        // Walk up the full parent chain (MultiGeometry can nest 2-3 levels)
+        let node = e;
+        for (let i = 0; i < 5 && node; i++) {
+          if (chk(node)) return true;
+          node = node.parent;
+        }
+        return false;
       }
 
       function drapePolygonToGround(pg: any, owner?: any) {
@@ -571,7 +578,12 @@ ${rows.join("")}
 
         for (const e of ds.entities.values) {
           if (e.polygon) {
-            if (is3dDepth(e)) continue;
+            if (is3dDepth(e)) {
+              // Preserve 3D volume geometry — force per-position heights
+              e.polygon.perPositionHeight = true;
+              e.polygon.heightReference = Cesium.HeightReference.NONE;
+              continue;
+            }
             const hasExtruded =
               e.polygon.extrudedHeight &&
               (e.polygon.extrudedHeight.getValue?.(now) ?? e.polygon.extrudedHeight) !== undefined;
