@@ -749,7 +749,11 @@ export async function processKml(
 
   onProgress?.("Serializing KML...");
   const serializer = new XMLSerializer();
-  const xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(doc);
+  let xmlStr = serializer.serializeToString(doc);
+  // Ensure exactly one XML declaration at the top
+  if (!xmlStr.startsWith("<?xml")) {
+    xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + xmlStr;
+  }
   return Buffer.from(xmlStr, "utf-8");
 }
 
