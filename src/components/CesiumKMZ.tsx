@@ -665,11 +665,20 @@ ${rows.join("")}
         }
 
         const bs = Cesium.BoundingSphere.fromPoints(pts);
-        const clearMult = 0.65;
-        const range = Math.max(10, bs.radius * (1 + clearMult));
 
-        const offset = new Cesium.HeadingPitchRange(0.0, -0.35, range);
-        await viewer.camera.flyToBoundingSphere(bs, {
+        // Project center to surface so camera doesn't fly underground
+        const centerCart = Cesium.Cartographic.fromCartesian(bs.center);
+        centerCart.height = 0;
+        const surfaceCenter = Cesium.Cartesian3.fromRadians(
+          centerCart.longitude, centerCart.latitude, 0
+        );
+        const surfaceBs = new Cesium.BoundingSphere(surfaceCenter, bs.radius);
+
+        const clearMult = 0.65;
+        const range = Math.max(10, surfaceBs.radius * (1 + clearMult));
+
+        const offset = new Cesium.HeadingPitchRange(0.0, -Math.PI / 2, range);
+        await viewer.camera.flyToBoundingSphere(surfaceBs, {
           offset,
           duration: 1.2,
         });
