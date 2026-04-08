@@ -382,7 +382,7 @@ function ReportTrainingTab({ token }: { token: string }) {
           <li>Each example should show the client question and the full expected report</li>
           <li>Use real data from CC Explorations surveys - entity names, depth ranges, coordinates</li>
           <li>Include the standard report sections: Survey Overview, Structures, Interpretation, Recommendations</li>
-          <li>Add a "Reporting Style Notes" section at the end for general style rules</li>
+          <li>Add a &quot;Reporting Style Notes&quot; section at the end for general style rules</li>
           <li>The AI will match the tone, detail level, and terminology from these examples</li>
         </ul>
       </div>
