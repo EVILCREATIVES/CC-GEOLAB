@@ -8,6 +8,7 @@ import {
   AlignmentType,
 } from "docx";
 import PDFDocument from "pdfkit";
+import { prisma } from "@/lib/prisma";
 
 const REPORT_PASSWORD = "ccadmin2026";
 
@@ -15,7 +16,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       password?: string;
-      format?: "docx" | "pdf";
+      format?: "docx" | "pdf" | "google-doc";
       fileContext?: string | null;
       chatHistory?: Array<{ role: string; text: string }>;
       fileName?: string;
@@ -25,15 +26,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid password." }, { status: 401 });
     }
 
-    const format = body.format === "pdf" ? "pdf" : "docx";
     const fileContext =
       typeof body.fileContext === "string"
         ? body.fileContext.slice(0, 8000)
         : null;
     const fileName = body.fileName || "AMRT Survey";
 
+    const format =
+      body.format === "pdf"
+        ? "pdf"
+        : body.format === "google-doc"
+        ? "google-doc"
+        : "docx";
     // Generate report text via Gemini
     const reportText = await generateReport(fileContext, body.chatHistory ?? [], fileName);
+
+    if (format === "google-doc") {
+      return NextResponse.json({ reportText });
+    }
 
     if (format === "docx") {
       const buffer = await buildDocx(reportText, fileName);
@@ -83,6 +93,16 @@ async function generateReport(
           .join("\n\n")}\n--- END CHAT ---`
       : "";
 
+  let templateExamples = "";
+  try {
+    const rule = await prisma.aiRule.findUnique({ where: { key: "gemini_report_examples" } });
+    if (rule?.value?.trim()) {
+      templateExamples = rule.value.trim().slice(0, 24000);
+    }
+  } catch {
+    // If DB lookup fails, proceed without template examples.
+  }
+
   const prompt = `You are a senior report writer for CC Explorations (ccexplorations.com), creating a professional AMRT Survey Report.
 
 Generate a complete, professional report for the survey "${fileName}" using the data and analysis below. Follow CC Explorations' standard reporting format:
@@ -102,6 +122,12 @@ Generate a complete, professional report for the survey "${fileName}" using the 
 - Distinguish high-confidence vs speculative interpretations
 - Reference AMRT as CC Explorations' proprietary satellite-based technology
 - Be thorough and detailed — this is a client-facing deliverable
+
+${templateExamples ? `## REPORT TEMPLATE EXAMPLES (HIGH PRIORITY)
+Match structure, tone, and section ordering from these approved examples whenever the input context supports it.
+--- BEGIN EXAMPLES ---
+${templateExamples}
+--- END EXAMPLES ---` : ""}
 
 ${fileContext ? `--- LOADED FILE DATA ---\n${fileContext}\n--- END FILE DATA ---` : "No file data loaded. Generate a template report structure."}
 ${chatSummary}

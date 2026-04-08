@@ -62,6 +62,10 @@ export default function HelpPanel() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [reportLoading, setReportLoading] = useState<"pdf" | "docx" | "google-doc" | null>(null);
+  const [reportPassword, setReportPassword] = useState("");
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportStatus, setReportStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
@@ -116,6 +120,69 @@ export default function HelpPanel() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await submitText(input);
+  }
+
+  async function runReport(format: "pdf" | "docx" | "google-doc") {
+    if (!reportPassword.trim()) {
+      setReportError("Enter admin password to generate report.");
+      return;
+    }
+    setReportError(null);
+    setReportStatus(null);
+    setReportLoading(format);
+
+    try {
+      const response = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: reportPassword,
+          format,
+          fileContext: summary?.llmContext ?? null,
+          chatHistory: messages,
+          fileName: summary?.fileName ?? "AMRT Survey",
+        }),
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "Report generation failed.");
+      }
+
+      if (format === "google-doc") {
+        const data = (await response.json()) as { reportText?: string };
+        const text = data.reportText?.trim();
+        if (!text) throw new Error("Google Doc content was empty.");
+
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Clipboard may fail on some browser permission setups.
+        }
+
+        window.open("https://docs.new", "_blank", "noopener,noreferrer");
+        setReportStatus("Google Docs opened. Paste with Ctrl+V to insert the report.");
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const ext = format === "pdf" ? "pdf" : "docx";
+      const safeName = (summary?.fileName || "AMRT_Survey").replace(/[^a-zA-Z0-9 _\-().]/g, "").trim() || "AMRT_Survey";
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeName}_Report.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setReportStatus(`Report downloaded as ${ext.toUpperCase()}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to generate report.";
+      setReportError(message);
+    } finally {
+      setReportLoading(null);
+    }
   }
 
   if (!open) {
@@ -215,6 +282,77 @@ export default function HelpPanel() {
           borderBottom: "1px solid var(--line)",
         }}
       >
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+          Report Export
+        </div>
+        <input
+          type="password"
+          value={reportPassword}
+          onChange={(e) => setReportPassword(e.target.value)}
+          placeholder="Admin password"
+          style={{
+            width: "100%",
+            borderRadius: 8,
+            border: "1px solid var(--line)",
+            background: "rgba(4, 8, 14, 0.75)",
+            color: "var(--text)",
+            padding: "8px 10px",
+            outline: "none",
+            fontSize: 12,
+          }}
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => runReport("pdf")}
+            disabled={Boolean(reportLoading)}
+            style={{
+              borderRadius: 8,
+              border: "1px solid var(--line)",
+              background: "rgba(46, 168, 255, 0.22)",
+              color: "var(--text)",
+              padding: "7px 8px",
+              fontSize: 12,
+              cursor: reportLoading ? "not-allowed" : "pointer",
+            }}
+          >
+            {reportLoading === "pdf" ? "Generating..." : "Download PDF"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runReport("docx")}
+            disabled={Boolean(reportLoading)}
+            style={{
+              borderRadius: 8,
+              border: "1px solid var(--line)",
+              background: "rgba(46, 168, 255, 0.12)",
+              color: "var(--text)",
+              padding: "7px 8px",
+              fontSize: 12,
+              cursor: reportLoading ? "not-allowed" : "pointer",
+            }}
+          >
+            {reportLoading === "docx" ? "Generating..." : "Download DOCX"}
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => runReport("google-doc")}
+          disabled={Boolean(reportLoading)}
+          style={{
+            borderRadius: 8,
+            border: "1px solid var(--line)",
+            background: "rgba(16, 185, 129, 0.16)",
+            color: "var(--text)",
+            padding: "7px 8px",
+            fontSize: 12,
+            cursor: reportLoading ? "not-allowed" : "pointer",
+          }}
+        >
+          {reportLoading === "google-doc" ? "Preparing..." : "Open in Google Docs"}
+        </button>
+        {reportError && <div style={{ fontSize: 11, color: "#ff9e9e" }}>{reportError}</div>}
+        {reportStatus && <div style={{ fontSize: 11, color: "#9adbbf" }}>{reportStatus}</div>}
       </div>
 
       <div

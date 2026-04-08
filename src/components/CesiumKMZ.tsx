@@ -4,6 +4,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useGeoData, type GeoEntity, type GeoFileSummary, type UserInfo } from "@/context/GeoDataContext";
+import AdminPanel from "@/components/AdminPanel";
 
 function ensureHeadAsset(tag: "link" | "script", attrs: Record<string, string>) {
   const selector = tag === "link" ? `link[href="${attrs.href}"]` : `script[src="${attrs.src}"]`;
@@ -154,6 +155,7 @@ export default function CesiumKMZ() {
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { setSummary, user } = useGeoData();
+  const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
     const rootNode = rootRef.current;
@@ -1809,12 +1811,13 @@ ${rows.join("")}
 
             <tr>
               <td>
-                <AccountSection />
+                <AccountSection onOpenAdmin={() => setAdminOpen(true)} />
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+      {adminOpen && <AdminPanel mode="overlay" onClose={() => setAdminOpen(false)} />}
     </div>
   );
 }
@@ -1871,7 +1874,7 @@ type HistoryItem = {
   createdAt: string;
 };
 
-function AccountSection() {
+function AccountSection({ onOpenAdmin }: { onOpenAdmin: () => void }) {
   const { user, setUser } = useGeoData();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -1986,10 +1989,9 @@ function AccountSection() {
               </div>
             </details>
 
-            {/* Admin link */}
-            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
+            <button onClick={onOpenAdmin} style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
               🔒 Admin Panel
-            </a>
+            </button>
           </>
         ) : (
           <>
@@ -2016,10 +2018,9 @@ function AccountSection() {
             </button>
             {error && <p style={{ color: "#f66", margin: 0, fontSize: 11 }}>{error}</p>}
 
-            {/* Admin link available even when logged out */}
-            <a href="/admin" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2 }}>
+            <button onClick={onOpenAdmin} style={{ fontSize: 10, color: "#888", textDecoration: "none", marginTop: 2, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
               🔒 Admin Panel
-            </a>
+            </button>
           </>
         )}
       </div>
