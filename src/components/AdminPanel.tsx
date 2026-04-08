@@ -49,7 +49,16 @@ export default function AdminPanel({ mode = "page", onClose }: AdminPanelProps) 
       <div style={styles.header}>
         <h1 style={{ margin: 0, fontSize: 20, color: "var(--accent)" }}>CC GEOLAB Admin</h1>
         <div style={{ display: "flex", gap: 8 }}>
-          {onClose && <button onClick={onClose} style={{ ...styles.btn, background: "#1f2b3f" }}>Close</button>}
+          {onClose ? (
+            <button onClick={onClose} style={{ ...styles.btn, background: "#1f2b3f" }}>Back to Main Page</button>
+          ) : (
+            <button
+              onClick={() => { window.location.href = "/"; }}
+              style={{ ...styles.btn, background: "#1f2b3f" }}
+            >
+              Back to Main Page
+            </button>
+          )}
           <button onClick={() => setToken(null)} style={{ ...styles.btn, background: "#333" }}>Logout</button>
         </div>
       </div>
