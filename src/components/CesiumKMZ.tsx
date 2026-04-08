@@ -1811,6 +1811,12 @@ ${rows.join("")}
 
             <tr>
               <td>
+                <ReportExportSection />
+              </td>
+            </tr>
+
+            <tr>
+              <td>
                 <AccountSection onOpenAdmin={() => setAdminOpen(true)} />
               </td>
             </tr>
@@ -1861,6 +1867,99 @@ function LegendLine({ label, dashed, under }: { label: string; dashed?: boolean;
       </svg>
       <span>{label}</span>
     </div>
+  );
+}
+
+/* ── Report Export Section (inline in toolbar) ──────────────── */
+
+function ReportExportSection() {
+  const { summary } = useGeoData();
+  const [reportPassword, setReportPassword] = React.useState("");
+  const [reportLoading, setReportLoading] = React.useState<"pdf" | "docx" | "google-doc" | null>(null);
+  const [reportError, setReportError] = React.useState<string | null>(null);
+  const [reportStatus, setReportStatus] = React.useState<string | null>(null);
+
+  const inputSt: React.CSSProperties = {
+    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(137,168,201,0.2)",
+    borderRadius: 4, color: "#e7eef8", padding: "5px 7px", fontSize: 11,
+    fontFamily: "system-ui", width: "100%", outline: "none",
+  };
+  const btnSt: React.CSSProperties = {
+    background: "#2ea8ff", border: "none", borderRadius: 4,
+    color: "#fff", padding: "5px 0", cursor: "pointer", fontSize: 11,
+    fontFamily: "system-ui", width: "100%",
+  };
+
+  async function runReport(format: "pdf" | "docx" | "google-doc") {
+    if (!reportPassword.trim()) { setReportError("Enter password first."); return; }
+    setReportError(null); setReportStatus(null); setReportLoading(format);
+    try {
+      const res = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: reportPassword,
+          format,
+          fileContext: summary?.llmContext ?? null,
+          chatHistory: [],
+          fileName: summary?.fileName ?? "AMRT Survey",
+        }),
+      });
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(d.error ?? "Failed.");
+      }
+      if (format === "google-doc") {
+        const d = (await res.json()) as { reportText?: string };
+        const text = d.reportText?.trim();
+        if (!text) throw new Error("Empty response.");
+        try { await navigator.clipboard.writeText(text); } catch { /* ignore permission errors */ }
+        window.open("https://docs.new", "_blank", "noopener,noreferrer");
+        setReportStatus("Google Docs opened — paste with Ctrl+V.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const ext = format === "pdf" ? "pdf" : "docx";
+      const safe = (summary?.fileName || "AMRT_Survey").replace(/[^a-zA-Z0-9 _\-().]/g, "").trim() || "AMRT_Survey";
+      const a = document.createElement("a");
+      a.href = url; a.download = `${safe}_Report.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      setReportStatus(`Downloaded as ${ext.toUpperCase()}.`);
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : "Error.");
+    } finally { setReportLoading(null); }
+  }
+
+  return (
+    <details style={{ marginTop: 2 }}>
+      <summary style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
+        📄 Report Export
+      </summary>
+      <div style={{ paddingTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
+        <input
+          type="password"
+          placeholder="Password (ccadmin2026)"
+          value={reportPassword}
+          onChange={(e) => setReportPassword(e.target.value)}
+          style={inputSt}
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+          <button onClick={() => runReport("pdf")} disabled={Boolean(reportLoading)} style={{ ...btnSt, opacity: reportLoading ? 0.6 : 1 }}>
+            {reportLoading === "pdf" ? "…" : "PDF"}
+          </button>
+          <button onClick={() => runReport("docx")} disabled={Boolean(reportLoading)} style={{ ...btnSt, opacity: reportLoading ? 0.6 : 1 }}>
+            {reportLoading === "docx" ? "…" : "DOCX"}
+          </button>
+        </div>
+        <button onClick={() => runReport("google-doc")} disabled={Boolean(reportLoading)} style={{ ...btnSt, background: "#1a73e8", opacity: reportLoading ? 0.6 : 1 }}>
+          {reportLoading === "google-doc" ? "…" : "Open in Google Docs"}
+        </button>
+        {reportError && <p style={{ color: "#f66", margin: 0, fontSize: 11 }}>{reportError}</p>}
+        {reportStatus && <p style={{ color: "#4af", margin: 0, fontSize: 11 }}>{reportStatus}</p>}
+      </div>
+    </details>
   );
 }
 
