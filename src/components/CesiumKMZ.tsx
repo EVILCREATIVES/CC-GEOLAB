@@ -1913,9 +1913,64 @@ function ReportExportSection() {
         const d = (await res.json()) as { reportText?: string };
         const text = d.reportText?.trim();
         if (!text) throw new Error("Empty response.");
-        try { await navigator.clipboard.writeText(text); } catch { /* ignore permission errors */ }
-        window.open("https://docs.new", "_blank", "noopener,noreferrer");
-        setReportStatus("Google Docs opened — paste with Ctrl+V.");
+        // Best-effort clipboard write (may fail without fresh user gesture)
+        let copied = false;
+        try {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        } catch {
+          /* ignore permission errors */
+        }
+        // Open a staging window that always shows the text + a reliable
+        // "Copy & Open Google Docs" button. This avoids the empty-doc
+        // problem when the async clipboard write is blocked.
+        const safeTitle = (summary?.fileName || "AMRT Survey").replace(/[<>&"]/g, "");
+        const escaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle} — Report</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#0b1220;color:#e6edf3;display:flex;flex-direction:column;height:100vh}
+  header{padding:12px 16px;background:#111827;border-bottom:1px solid #1f2937;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  h1{font-size:14px;margin:0;flex:1;color:#9ca3af;font-weight:500}
+  button{background:#1a73e8;color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;font-weight:600}
+  button.secondary{background:#374151}
+  #status{font-size:12px;color:#10b981;margin-left:8px}
+  textarea{flex:1;width:100%;border:0;padding:16px;background:#0b1220;color:#e6edf3;font-family:ui-monospace,monospace;font-size:13px;line-height:1.5;resize:none;outline:none;box-sizing:border-box}
+</style></head><body>
+<header>
+  <h1>${safeTitle} — Report (${text.length.toLocaleString()} chars)</h1>
+  <span id="status">${copied ? "Copied to clipboard ✓" : ""}</span>
+  <button id="copy">Copy</button>
+  <button id="go" class="secondary">Open Google Docs</button>
+  <button id="both">Copy &amp; Open Google Docs</button>
+</header>
+<textarea id="ta" readonly>${escaped}</textarea>
+<script>
+  const ta=document.getElementById('ta');
+  const status=document.getElementById('status');
+  async function copy(){
+    ta.select();
+    try{ await navigator.clipboard.writeText(ta.value); }
+    catch(e){ document.execCommand('copy'); }
+    status.textContent='Copied to clipboard ✓';
+  }
+  document.getElementById('copy').onclick=copy;
+  document.getElementById('go').onclick=()=>window.open('https://docs.new','_blank','noopener,noreferrer');
+  document.getElementById('both').onclick=async()=>{ await copy(); window.open('https://docs.new','_blank','noopener,noreferrer'); };
+</script>
+</body></html>`;
+        const win = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
+        if (!win) {
+          throw new Error("Popup blocked — allow popups and try again.");
+        }
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
+        setReportStatus(copied
+          ? "Report copied — click 'Open Google Docs' and paste."
+          : "Report ready — click 'Copy & Open Google Docs'.");
         return;
       }
       const blob = await res.blob();
@@ -1940,7 +1995,7 @@ function ReportExportSection() {
       <div style={{ paddingTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
         <input
           type="password"
-          placeholder="Password (ccadmin2026)"
+          placeholder="Password"
           value={reportPassword}
           onChange={(e) => setReportPassword(e.target.value)}
           style={inputSt}

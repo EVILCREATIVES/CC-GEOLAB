@@ -7,7 +7,7 @@ import {
   HeadingLevel,
   AlignmentType,
 } from "docx";
-import PDFDocument from "pdfkit";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { prisma } from "@/lib/prisma";
 
 const REPORT_PASSWORD = "ccadmin2026";
@@ -318,70 +318,100 @@ async function buildPdf(
   reportText: string,
   fileName: string,
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 60, size: "A4" });
-    const chunks: Buffer[] = [];
+  const pdfDoc = await PDFDocument.create();
+  const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
+  const pageW = 595.28; // A4
+  const pageH = 841.89;
+  const margin = 60;
+  const contentW = pageW - margin * 2;
 
-    // Title page header
-    doc
-      .fontSize(22)
-      .fillColor("#2EA8FF")
-      .text("CC EXPLORATIONS", { align: "center" });
-    doc.moveDown(0.3);
-    doc
-      .fontSize(16)
-      .fillColor("#000000")
-      .text(`AMRT Survey Report — ${fileName}`, { align: "center" });
-    doc.moveDown(0.2);
-    doc
-      .fontSize(10)
-      .fillColor("#888888")
-      .text(
-        `Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,
-        { align: "center" },
-      );
-    doc.moveDown(1.5);
+  let page = pdfDoc.addPage([pageW, pageH]);
+  let y = pageH - margin;
 
-    // Content
-    const blocks = parseMarkdown(reportText);
-    for (const block of blocks) {
-      switch (block.type) {
-        case "h1":
-          doc.moveDown(0.8);
-          doc.fontSize(18).fillColor("#1a3a5c").text(block.text);
-          doc.moveDown(0.3);
-          break;
-        case "h2":
-          doc.moveDown(0.6);
-          doc.fontSize(14).fillColor("#2a4a6c").text(block.text);
-          doc.moveDown(0.2);
-          break;
-        case "h3":
-          doc.moveDown(0.4);
-          doc.fontSize(12).fillColor("#3a5a7c").text(block.text, { bold: true } as PDFKit.Mixins.TextOptions);
-          doc.moveDown(0.15);
-          break;
-        case "bullet":
-          doc
-            .fontSize(10)
-            .fillColor("#000000")
-            .text(`  •  ${block.text}`, { indent: 20 });
-          doc.moveDown(0.1);
-          break;
-        default:
-          doc
-            .fontSize(10)
-            .fillColor("#000000")
-            .text(block.text, { lineGap: 2 });
-          doc.moveDown(0.15);
-          break;
+  function ensureSpace(needed: number) {
+    if (y - needed < margin) {
+      page = pdfDoc.addPage([pageW, pageH]);
+      y = pageH - margin;
+    }
+  }
+
+  function drawText(
+    text: string,
+    opts: { size: number; font: typeof helvetica; color?: readonly [number, number, number]; indent?: number; lineGap?: number },
+  ) {
+    const { size, font, color = [0, 0, 0] as [number, number, number], indent = 0, lineGap = 2 } = opts;
+    const maxWidth = contentW - indent;
+    // Word-wrap manually
+    const words = text.split(" ");
+    let line = "";
+    const lines: string[] = [];
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
       }
     }
+    if (line) lines.push(line);
 
-    doc.end();
-  });
+    const lineH = size + lineGap;
+    ensureSpace(lines.length * lineH + 4);
+    for (const l of lines) {
+      page.drawText(l, {
+        x: margin + indent,
+        y,
+        size,
+        font,
+        color: rgb(color[0], color[1], color[2]),
+      });
+      y -= lineH;
+    }
+  }
+
+  // Title
+  drawText("CC EXPLORATIONS", { size: 22, font: helveticaBold, color: [0.18, 0.659, 1.0] });
+  y -= 6;
+  drawText(`AMRT Survey Report — ${fileName}`, { size: 14, font: helveticaBold, color: [0, 0, 0] });
+  y -= 4;
+  drawText(
+    `Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,
+    { size: 9, font: helvetica, color: [0.53, 0.53, 0.53] },
+  );
+  y -= 20;
+
+  const blocks = parseMarkdown(reportText);
+  for (const block of blocks) {
+    switch (block.type) {
+      case "h1":
+        y -= 14;
+        drawText(block.text, { size: 16, font: helveticaBold, color: [0.1, 0.23, 0.36] });
+        y -= 4;
+        break;
+      case "h2":
+        y -= 10;
+        drawText(block.text, { size: 13, font: helveticaBold, color: [0.17, 0.29, 0.42] });
+        y -= 2;
+        break;
+      case "h3":
+        y -= 6;
+        drawText(block.text, { size: 11, font: helveticaBold, color: [0.23, 0.36, 0.49] });
+        y -= 2;
+        break;
+      case "bullet":
+        drawText(`• ${block.text}`, { size: 10, font: helvetica, indent: 16 });
+        y -= 2;
+        break;
+      default:
+        drawText(block.text, { size: 10, font: block.bold ? helveticaBold : helvetica });
+        y -= 2;
+        break;
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return Buffer.from(pdfBytes);
 }
