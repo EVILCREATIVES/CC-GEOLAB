@@ -1893,6 +1893,24 @@ function ReportExportSection() {
   async function runReport(format: "pdf" | "docx" | "google-doc") {
     if (!reportPassword.trim()) { setReportError("Enter password first."); return; }
     setReportError(null); setReportStatus(null); setReportLoading(format);
+    // For google-doc we must open the tab synchronously inside the click
+    // handler, otherwise the browser treats the later window.open() as a
+    // popup (post-await user-gesture lost) and blocks it.
+    let preOpened: Window | null = null;
+    if (format === "google-doc") {
+      preOpened = window.open("about:blank", "_blank");
+      if (preOpened) {
+        try {
+          preOpened.document.open();
+          preOpened.document.write(
+            '<!doctype html><title>Generating report…</title>' +
+            '<body style="font:14px system-ui;background:#0b1220;color:#e6edf3;padding:24px">' +
+            'Generating report… please wait.</body>'
+          );
+          preOpened.document.close();
+        } catch { /* ignore */ }
+      }
+    }
     try {
       const res = await fetch("/api/report", {
         method: "POST",
@@ -1961,13 +1979,25 @@ function ReportExportSection() {
   document.getElementById('both').onclick=async()=>{ await copy(); window.open('https://docs.new','_blank','noopener,noreferrer'); };
 </script>
 </body></html>`;
-        const win = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
-        if (!win) {
-          throw new Error("Popup blocked — allow popups and try again.");
+        // Reuse the window opened synchronously before the await (popup
+        // blockers and sandboxed iframes only allow window.open during a
+        // user-gesture). Specifying "noopener" in features makes
+        // window.open return null, so we cannot write to it — that's why
+        // we kept a handle in `preOpened`.
+        let win: Window | null = preOpened ?? null;
+        if (!win || win.closed) {
+          win = window.open("", "_blank", "width=900,height=700");
         }
-        win.document.open();
-        win.document.write(html);
-        win.document.close();
+        if (!win) {
+          throw new Error("Popup blocked — allow popups for this site and try again.");
+        }
+        try {
+          win.document.open();
+          win.document.write(html);
+          win.document.close();
+        } catch {
+          throw new Error("Could not write report to popup. Allow popups and try again.");
+        }
         setReportStatus(copied
           ? "Report copied — click 'Open Google Docs' and paste."
           : "Report ready — click 'Copy & Open Google Docs'.");
