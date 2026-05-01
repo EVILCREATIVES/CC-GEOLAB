@@ -45,17 +45,8 @@ export async function POST(request: Request) {
 
     if (format === "google-doc") {
       const buffer = await buildDocx(reportText, fileName);
-      try {
-        const url = await createGoogleDoc(buffer, fileName);
-        return NextResponse.json({ url });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Drive upload failed.";
-        // Fall back to returning text so the client can still recover.
-        return NextResponse.json(
-          { error: msg, reportText },
-          { status: 500 },
-        );
-      }
+      const url = await createGoogleDoc(buffer, fileName);
+      return NextResponse.json({ url });
     }
 
     if (format === "docx") {
