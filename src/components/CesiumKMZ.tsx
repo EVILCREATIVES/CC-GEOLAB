@@ -1872,6 +1872,96 @@ function LegendLine({ label, dashed, under }: { label: string; dashed?: boolean;
 
 /* ── Report Export Section (inline in toolbar) ──────────────── */
 
+// Minimal typing for Google Identity Services token client. The script
+// is loaded in the root layout via next/script.
+type GoogleTokenClient = {
+  callback: (resp: { access_token?: string; error?: string }) => void;
+  requestAccessToken: (overrides?: { prompt?: string }) => void;
+};
+type GoogleAccountsOAuth2 = {
+  initTokenClient: (config: {
+    client_id: string;
+    scope: string;
+    callback: (resp: { access_token?: string; error?: string }) => void;
+  }) => GoogleTokenClient;
+};
+declare global {
+  interface Window {
+    google?: { accounts?: { oauth2?: GoogleAccountsOAuth2 } };
+  }
+}
+
+// Prompt the user to grant Drive access and return an OAuth access token.
+// Uses the implicit/token flow so we never need a server-side OAuth callback.
+async function getGoogleDriveToken(): Promise<string> {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
+  if (!clientId) {
+    throw new Error(
+      "Missing NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID. Set it in Vercel env vars and redeploy.",
+    );
+  }
+  // Wait briefly for the GIS script (loaded in layout) to initialise.
+  for (let i = 0; i < 50 && !window.google?.accounts?.oauth2; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const oauth2 = window.google?.accounts?.oauth2;
+  if (!oauth2) throw new Error("Google sign-in script failed to load. Disable ad/tracker blockers and retry.");
+
+  return new Promise<string>((resolve, reject) => {
+    const client = oauth2.initTokenClient({
+      client_id: clientId,
+      scope: "https://www.googleapis.com/auth/drive.file",
+      callback: (resp) => {
+        if (resp.error) {
+          reject(new Error(`Google sign-in failed: ${resp.error}`));
+          return;
+        }
+        if (!resp.access_token) {
+          reject(new Error("Google sign-in returned no access token."));
+          return;
+        }
+        resolve(resp.access_token);
+      },
+    });
+    client.requestAccessToken({ prompt: "" });
+  });
+}
+
+// Upload a DOCX blob to the user's Drive and convert to a Google Doc.
+// Returns the docs.google.com URL of the new document.
+async function uploadToGoogleDrive(
+  accessToken: string,
+  docxBlob: Blob,
+  title: string,
+): Promise<string> {
+  const metadata = {
+    name: title,
+    mimeType: "application/vnd.google-apps.document",
+  };
+  const form = new FormData();
+  form.append(
+    "metadata",
+    new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+  );
+  form.append("file", docxBlob);
+
+  const res = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    },
+  );
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Drive upload failed (${res.status}): ${txt.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as { id?: string; webViewLink?: string };
+  if (!data.id) throw new Error("Drive upload returned no file id.");
+  return data.webViewLink ?? `https://docs.google.com/document/d/${data.id}/edit`;
+}
+
 function ReportExportSection() {
   const { summary } = useGeoData();
   const [reportPassword, setReportPassword] = React.useState("");
@@ -1893,24 +1983,45 @@ function ReportExportSection() {
   async function runReport(format: "pdf" | "docx" | "google-doc") {
     if (!reportPassword.trim()) { setReportError("Enter password first."); return; }
     setReportError(null); setReportStatus(null); setReportLoading(format);
-    // For google-doc we must open the tab synchronously inside the click
-    // handler, otherwise the browser treats the later window.open() as a
-    // popup (post-await user-gesture lost) and blocks it.
-    let preOpened: Window | null = null;
+
+    // ── google-doc: per-user OAuth flow ───────────────────────
+    // 1. Prompt the user (or the already-signed-in account) for a
+    //    Drive access token via Google Identity Services.
+    // 2. Fetch the DOCX bytes from /api/report.
+    // 3. Multipart-upload to Drive with the user's token, asking
+    //    Drive to convert to a Google Doc on the way in.
+    // 4. Open the resulting doc URL in a new tab.
     if (format === "google-doc") {
-      preOpened = window.open("about:blank", "_blank");
-      if (preOpened) {
-        try {
-          preOpened.document.open();
-          preOpened.document.write(
-            '<!doctype html><title>Generating report…</title>' +
-            '<body style="font:14px system-ui;background:#0b1220;color:#e6edf3;padding:24px">' +
-            'Generating report… please wait.</body>'
-          );
-          preOpened.document.close();
-        } catch { /* ignore */ }
-      }
+      try {
+        const accessToken = await getGoogleDriveToken();
+        setReportStatus("Generating report…");
+        const res = await fetch("/api/report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password: reportPassword,
+            format,
+            fileContext: summary?.llmContext ?? null,
+            chatHistory: [],
+            fileName: summary?.fileName ?? "AMRT Survey",
+          }),
+        });
+        if (!res.ok) {
+          const d = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(d.error ?? "Report generation failed.");
+        }
+        const docxBlob = await res.blob();
+        setReportStatus("Uploading to your Google Drive…");
+        const safe = (summary?.fileName || "AMRT_Survey").replace(/[^a-zA-Z0-9 _\-().]/g, "").trim() || "AMRT_Survey";
+        const docUrl = await uploadToGoogleDrive(accessToken, docxBlob, `${safe} — AMRT Report`);
+        window.open(docUrl, "_blank");
+        setReportStatus("Opened in Google Docs.");
+      } catch (err) {
+        setReportError(err instanceof Error ? err.message : "Error.");
+      } finally { setReportLoading(null); }
+      return;
     }
+
     try {
       const res = await fetch("/api/report", {
         method: "POST",
@@ -1925,25 +2036,7 @@ function ReportExportSection() {
       });
       if (!res.ok) {
         const d = (await res.json().catch(() => ({}))) as { error?: string };
-        // Close the synchronously-opened tab so the user isn't left
-        // staring at "Generating report…" forever.
-        if (preOpened && !preOpened.closed) { try { preOpened.close(); } catch { /* ignore */ } }
         throw new Error(d.error ?? "Failed.");
-      }
-      if (format === "google-doc") {
-        const d = (await res.json()) as { url?: string };
-        const url = d.url;
-        if (!url) throw new Error("Server returned no document URL.");
-        // Navigate the synchronously-opened window straight to the doc.
-        let win: Window | null = preOpened ?? null;
-        if (!win || win.closed) {
-          win = window.open(url, "_blank");
-        } else {
-          try { win.location.href = url; } catch { win = window.open(url, "_blank"); }
-        }
-        if (!win) throw new Error("Popup blocked — allow popups for this site and try again.");
-        setReportStatus("Opened in Google Docs.");
-        return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

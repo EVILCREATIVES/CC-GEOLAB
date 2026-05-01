@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +14,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {/* Google Identity Services — needed for "Open in Google Docs" OAuth */}
+        <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />
+        {children}
+      </body>
     </html>
   );
 }

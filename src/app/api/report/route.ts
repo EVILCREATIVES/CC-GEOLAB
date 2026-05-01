@@ -8,8 +8,6 @@ import {
   AlignmentType,
 } from "docx";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { google } from "googleapis";
-import { Readable } from "stream";
 import { prisma } from "@/lib/prisma";
 
 const REPORT_PASSWORD = "ccadmin2026";
@@ -44,9 +42,18 @@ export async function POST(request: Request) {
     const reportText = await generateReport(fileContext, body.chatHistory ?? [], fileName);
 
     if (format === "google-doc") {
+      // Return DOCX bytes; the client uploads them to the user's own
+      // Google Drive (per-user OAuth) and converts to a Google Doc.
       const buffer = await buildDocx(reportText, fileName);
-      const url = await createGoogleDoc(buffer, fileName);
-      return NextResponse.json({ url });
+      return new NextResponse(new Uint8Array(buffer), {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "Content-Disposition": `attachment; filename="${sanitizeFilename(fileName)}_Report.docx"`,
+          "X-Report-Filename": sanitizeFilename(fileName),
+        },
+      });
     }
 
     if (format === "docx") {
@@ -485,65 +492,4 @@ async function buildPdf(
 
   const pdfBytes = await pdfDoc.save();
   return Buffer.from(pdfBytes);
-}
-
-// ── Upload DOCX to Google Drive and convert to Google Doc ───
-async function createGoogleDoc(docxBuffer: Buffer, fileName: string): Promise<string> {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) {
-    throw new Error(
-      "Google Docs export not configured. Set GOOGLE_SERVICE_ACCOUNT_JSON in the server environment.",
-    );
-  }
-
-  let creds: { client_email: string; private_key: string };
-  try {
-    creds = JSON.parse(raw) as { client_email: string; private_key: string };
-  } catch {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON.");
-  }
-  // Vercel often stores newlines escaped as \n inside the JSON string.
-  if (creds.private_key && creds.private_key.includes("\\n")) {
-    creds.private_key = creds.private_key.replace(/\\n/g, "\n");
-  }
-
-  const auth = new google.auth.JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
-  const drive = google.drive({ version: "v3", auth });
-
-  const safe = sanitizeFilename(fileName);
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || undefined;
-
-  const created = await drive.files.create({
-    requestBody: {
-      name: `${safe} — AMRT Report`,
-      mimeType: "application/vnd.google-apps.document",
-      ...(folderId ? { parents: [folderId] } : {}),
-    },
-    media: {
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      body: Readable.from(docxBuffer),
-    },
-    fields: "id, webViewLink",
-    supportsAllDrives: true,
-  });
-
-  const fileId = created.data.id;
-  if (!fileId) throw new Error("Drive upload returned no file id.");
-
-  // Make it accessible via link so the user can open it without
-  // sharing the service account.
-  await drive.permissions.create({
-    fileId,
-    requestBody: { role: "writer", type: "anyone" },
-    supportsAllDrives: true,
-  });
-
-  return (
-    created.data.webViewLink ?? `https://docs.google.com/document/d/${fileId}/edit`
-  );
 }
