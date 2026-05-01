@@ -183,10 +183,62 @@ Generate the full report now. Use markdown headings (# ## ###) for structure. Do
 }
 
 // ── Parse markdown text into structured paragraphs ──────────
-interface ReportBlock {
-  type: "h1" | "h2" | "h3" | "paragraph" | "bullet";
+interface InlineRun {
   text: string;
   bold?: boolean;
+  italic?: boolean;
+}
+
+interface ReportBlock {
+  type: "h1" | "h2" | "h3" | "paragraph" | "bullet";
+  runs: InlineRun[];
+  // Convenience flag — true when the entire line is wrapped in **...**.
+  bold?: boolean;
+}
+
+// Parse inline markdown emphasis: **bold**, __bold__, *italic*, _italic_.
+// Treats single-asterisk segments as italic, double as bold. Handles
+// nesting like ***word*** by combining bold+italic.
+function parseInline(text: string): InlineRun[] {
+  const runs: InlineRun[] = [];
+  let i = 0;
+  let buf = "";
+  let bold = false;
+  let italic = false;
+  const flush = () => {
+    if (buf) {
+      runs.push({ text: buf, bold: bold || undefined, italic: italic || undefined });
+      buf = "";
+    }
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if ((ch === "*" || ch === "_") && next === ch) {
+      flush();
+      bold = !bold;
+      i += 2;
+      continue;
+    }
+    if (ch === "*" || ch === "_") {
+      flush();
+      italic = !italic;
+      i += 1;
+      continue;
+    }
+    buf += ch;
+    i += 1;
+  }
+  flush();
+  // If parsing ended with an unclosed marker, any leftover state is
+  // already baked into the runs we emitted; nothing more to do.
+  return runs.length > 0 ? runs : [{ text }];
+}
+
+// Strip emphasis markers entirely (used for headings, where styling is
+// handled by the heading level itself).
+function stripInline(text: string): string {
+  return text.replace(/\*\*/g, "").replace(/__/g, "").replace(/(^|[^*])\*(?!\*)/g, "$1").replace(/(^|[^_])_(?!_)/g, "$1");
 }
 
 function parseMarkdown(text: string): ReportBlock[] {
@@ -195,21 +247,24 @@ function parseMarkdown(text: string): ReportBlock[] {
     const line = rawLine.trimEnd();
     if (!line) continue;
     if (line.startsWith("### ")) {
-      blocks.push({ type: "h3", text: line.slice(4).replace(/\*\*/g, "") });
+      blocks.push({ type: "h3", runs: [{ text: stripInline(line.slice(4)) }] });
     } else if (line.startsWith("## ")) {
-      blocks.push({ type: "h2", text: line.slice(3).replace(/\*\*/g, "") });
+      blocks.push({ type: "h2", runs: [{ text: stripInline(line.slice(3)) }] });
     } else if (line.startsWith("# ")) {
-      blocks.push({ type: "h1", text: line.slice(2).replace(/\*\*/g, "") });
-    } else if (/^[-*]\s/.test(line)) {
-      blocks.push({ type: "bullet", text: line.slice(2).replace(/\*\*/g, "") });
+      blocks.push({ type: "h1", runs: [{ text: stripInline(line.slice(2)) }] });
     } else {
-      // Detect bold lines like **something**
-      const isBold = /^\*\*.*\*\*$/.test(line.trim());
-      blocks.push({
-        type: "paragraph",
-        text: line.replace(/\*\*/g, ""),
-        bold: isBold,
-      });
+      const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bulletMatch) {
+        blocks.push({ type: "bullet", runs: parseInline(bulletMatch[1]) });
+      } else {
+        const trimmed = line.trim();
+        const isWholeBold = /^\*\*[\s\S]+\*\*$/.test(trimmed) || /^__[\s\S]+__$/.test(trimmed);
+        blocks.push({
+          type: "paragraph",
+          runs: parseInline(line),
+          bold: isWholeBold || undefined,
+        });
+      }
     }
   }
   return blocks;
@@ -270,7 +325,7 @@ async function buildDocx(
       case "h1":
         children.push(
           new Paragraph({
-            text: block.text,
+            text: block.runs.map((r) => r.text).join(""),
             heading: HeadingLevel.HEADING_1,
             spacing: { before: 400, after: 200 },
           }),
@@ -279,7 +334,7 @@ async function buildDocx(
       case "h2":
         children.push(
           new Paragraph({
-            text: block.text,
+            text: block.runs.map((r) => r.text).join(""),
             heading: HeadingLevel.HEADING_2,
             spacing: { before: 300, after: 150 },
           }),
@@ -288,7 +343,7 @@ async function buildDocx(
       case "h3":
         children.push(
           new Paragraph({
-            text: block.text,
+            text: block.runs.map((r) => r.text).join(""),
             heading: HeadingLevel.HEADING_3,
             spacing: { before: 200, after: 100 },
           }),
@@ -297,7 +352,15 @@ async function buildDocx(
       case "bullet":
         children.push(
           new Paragraph({
-            children: [new TextRun({ text: block.text, size: 22 })],
+            children: block.runs.map(
+              (r) =>
+                new TextRun({
+                  text: r.text,
+                  size: 22,
+                  bold: r.bold,
+                  italics: r.italic,
+                }),
+            ),
             bullet: { level: 0 },
             spacing: { after: 60 },
           }),
@@ -306,13 +369,15 @@ async function buildDocx(
       default:
         children.push(
           new Paragraph({
-            children: [
-              new TextRun({
-                text: block.text,
-                size: 22,
-                bold: block.bold,
-              }),
-            ],
+            children: block.runs.map(
+              (r) =>
+                new TextRun({
+                  text: r.text,
+                  size: 22,
+                  bold: r.bold || block.bold,
+                  italics: r.italic,
+                }),
+            ),
             spacing: { after: 120 },
           }),
         );
@@ -398,28 +463,30 @@ async function buildPdf(
 
   const blocks = parseMarkdown(reportText);
   for (const block of blocks) {
+    const flatText = block.runs.map((r) => r.text).join("");
+    const anyBold = block.runs.some((r) => r.bold) || block.bold;
     switch (block.type) {
       case "h1":
         y -= 14;
-        drawText(block.text, { size: 16, font: helveticaBold, color: [0.1, 0.23, 0.36] });
+        drawText(flatText, { size: 16, font: helveticaBold, color: [0.1, 0.23, 0.36] });
         y -= 4;
         break;
       case "h2":
         y -= 10;
-        drawText(block.text, { size: 13, font: helveticaBold, color: [0.17, 0.29, 0.42] });
+        drawText(flatText, { size: 13, font: helveticaBold, color: [0.17, 0.29, 0.42] });
         y -= 2;
         break;
       case "h3":
         y -= 6;
-        drawText(block.text, { size: 11, font: helveticaBold, color: [0.23, 0.36, 0.49] });
+        drawText(flatText, { size: 11, font: helveticaBold, color: [0.23, 0.36, 0.49] });
         y -= 2;
         break;
       case "bullet":
-        drawText(`• ${block.text}`, { size: 10, font: helvetica, indent: 16 });
+        drawText(`• ${flatText}`, { size: 10, font: anyBold ? helveticaBold : helvetica, indent: 16 });
         y -= 2;
         break;
       default:
-        drawText(block.text, { size: 10, font: block.bold ? helveticaBold : helvetica });
+        drawText(flatText, { size: 10, font: anyBold ? helveticaBold : helvetica });
         y -= 2;
         break;
     }
