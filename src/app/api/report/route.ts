@@ -12,12 +12,165 @@ import { prisma } from "@/lib/prisma";
 
 const REPORT_PASSWORD = "ccadmin2026";
 
+// ── Deterministic facts extraction ──────────────────────────
+// The only way to guarantee that regenerating the report doesn't change
+// the *data* (locations, depths, target counts, ranking) is to compute
+// those facts ourselves in code and inject them as an authoritative
+// block. Temperature/seed on Gemini reduce drift but don't eliminate it.
+
+type ApiEntity = {
+  name?: string;
+  folder?: string;
+  type?: string;
+  properties?: Record<string, string | number>;
+};
+
+type Target = {
+  id: string;
+  folder: string;
+  confidence: number | null; // 0..100, null if unknown
+  depthTop: number | null;   // metres, null if unknown
+  depthBottom: number | null;
+  resource: string | null;
+  lat: number | null;
+  lon: number | null;
+};
+
+const NUM_RE = /-?\d+(?:\.\d+)?/;
+
+function pickProp(
+  props: Record<string, string | number> | undefined,
+  matchers: RegExp[],
+): string | number | null {
+  if (!props) return null;
+  for (const m of matchers) {
+    for (const [k, v] of Object.entries(props)) {
+      if (m.test(k)) return v;
+    }
+  }
+  return null;
+}
+
+function toNumber(v: string | number | null): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const m = String(v).match(NUM_RE);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildTarget(e: ApiEntity): Target {
+  const p = e.properties ?? {};
+  const confRaw = pickProp(p, [/confidence/i, /probability/i, /score/i, /%/]);
+  const conf = toNumber(confRaw);
+  const confidence =
+    conf == null ? null : conf <= 1 ? Math.round(conf * 1000) / 10 : Math.round(conf * 10) / 10;
+
+  const depthMin = toNumber(pickProp(p, [/depth.*(min|top|from|start)/i, /^min.*depth/i, /^top/i]));
+  const depthMax = toNumber(pickProp(p, [/depth.*(max|bottom|to|end)/i, /^max.*depth/i, /^bottom/i]));
+  const depthSingle = toNumber(pickProp(p, [/^depth$/i, /^z$/i, /elevation/i]));
+
+  const lat = toNumber(pickProp(p, [/^lat/i, /latitude/i]));
+  const lon = toNumber(pickProp(p, [/^lon/i, /^lng/i, /longitude/i]));
+  const resourceRaw = pickProp(p, [/resource/i, /commodity/i, /mineral/i, /element/i, /type$/i]);
+
+  return {
+    id: (e.name ?? "(unnamed)").trim(),
+    folder: (e.folder ?? "(root)").trim(),
+    confidence,
+    depthTop: depthMin ?? depthSingle,
+    depthBottom: depthMax ?? depthSingle,
+    resource: resourceRaw == null ? null : String(resourceRaw),
+    lat,
+    lon,
+  };
+}
+
+// Deterministic ranking: confidence desc, then shallower top depth,
+// then target ID ascending. Unknowns sort last within each tier.
+function rankTargets(ts: Target[]): Target[] {
+  return [...ts].sort((a, b) => {
+    const ac = a.confidence ?? -1;
+    const bc = b.confidence ?? -1;
+    if (ac !== bc) return bc - ac;
+    const ad = a.depthTop ?? Number.POSITIVE_INFINITY;
+    const bd = b.depthTop ?? Number.POSITIVE_INFINITY;
+    if (ad !== bd) return ad - bd;
+    return a.id.localeCompare(b.id, "en", { numeric: true, sensitivity: "base" });
+  });
+}
+
+function inferLocation(entities: ApiEntity[], targets: Target[], fileName: string): string {
+  // 1. Look for an explicit location-like property on any entity.
+  for (const e of entities) {
+    const v = pickProp(e.properties, [/^location$/i, /^site$/i, /^region$/i, /^country$/i, /^area$/i, /^prospect$/i]);
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  // 2. Use the first non-root folder name (often the survey site).
+  const folder = entities.map((e) => e.folder).find((f) => f && f !== "(root)");
+  if (folder) return folder;
+  // 3. Fall back to centroid coordinates if we have any.
+  const coords = targets.filter((t) => t.lat != null && t.lon != null);
+  if (coords.length > 0) {
+    const lat = coords.reduce((s, t) => s + (t.lat as number), 0) / coords.length;
+    const lon = coords.reduce((s, t) => s + (t.lon as number), 0) / coords.length;
+    return `${lat.toFixed(4)}\u00B0, ${lon.toFixed(4)}\u00B0`;
+  }
+  // 4. Last resort: the filename, but flagged so the model knows it's weak.
+  return fileName ? `Survey Site (${fileName})` : "Survey Site";
+}
+
+function buildFactsBlock(entities: ApiEntity[] | null, fileName: string): {
+  facts: string;
+  location: string;
+} {
+  if (!entities || entities.length === 0) {
+    return { facts: "", location: "Survey Site" };
+  }
+
+  const targets = entities
+    .filter((e) => (e.type ?? "") !== "label")
+    .map(buildTarget);
+  const ranked = rankTargets(targets);
+  const location = inferLocation(entities, targets, fileName);
+
+  const depthValues = targets.flatMap((t) => [t.depthTop, t.depthBottom]).filter((v): v is number => v != null);
+  const depthMin = depthValues.length ? Math.min(...depthValues) : null;
+  const depthMax = depthValues.length ? Math.max(...depthValues) : null;
+
+  const folderCounts = new Map<string, number>();
+  for (const e of entities) folderCounts.set(e.folder ?? "(root)", (folderCounts.get(e.folder ?? "(root)") ?? 0) + 1);
+
+  const lines: string[] = [];
+  lines.push(`LOCATION: ${location}`);
+  lines.push(`TOTAL_TARGETS: ${targets.length}`);
+  if (depthMin != null && depthMax != null) {
+    lines.push(`DEPTH_PENETRATION_M: ${depthMin} to ${depthMax}`);
+  } else {
+    lines.push(`DEPTH_PENETRATION_M: not specified in source data`);
+  }
+  lines.push(`FOLDERS: ${[...folderCounts.entries()].map(([f, c]) => `${f} (${c})`).join("; ")}`);
+  lines.push("");
+  lines.push("RANKED_TARGETS (rank | id | resource | depth_top_m | depth_bottom_m | confidence_pct):");
+  for (let i = 0; i < ranked.length; i++) {
+    const t = ranked[i];
+    lines.push(
+      `${i + 1} | ${t.id} | ${t.resource ?? "n/a"} | ${t.depthTop ?? "n/a"} | ${t.depthBottom ?? "n/a"} | ${t.confidence ?? "n/a"}`,
+    );
+  }
+  // Hard cap to keep prompt size sane on very large surveys.
+  const facts = lines.join("\n").slice(0, 12000);
+  return { facts, location };
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       password?: string;
       format?: "docx" | "pdf" | "google-doc";
       fileContext?: string | null;
+      entities?: ApiEntity[] | null;
       chatHistory?: Array<{ role: string; text: string }>;
       fileName?: string;
     };
@@ -31,6 +184,7 @@ export async function POST(request: Request) {
         ? body.fileContext.slice(0, 8000)
         : null;
     const fileName = body.fileName || "AMRT Survey";
+    const { facts, location } = buildFactsBlock(body.entities ?? null, fileName);
 
     const format =
       body.format === "pdf"
@@ -38,8 +192,10 @@ export async function POST(request: Request) {
         : body.format === "google-doc"
         ? "google-doc"
         : "docx";
-    // Generate report text via Gemini
-    const reportText = await generateReport(fileContext, body.chatHistory ?? [], fileName);
+    // Generate report text via Gemini. The deterministic FACTS block we
+    // computed above is the authoritative source of truth; the model is
+    // only allowed to wordsmith around it.
+    const reportText = await generateReport(fileContext, body.chatHistory ?? [], fileName, facts, location);
 
     if (format === "google-doc") {
       // Return DOCX bytes; the client uploads them to the user's own
@@ -92,6 +248,8 @@ async function generateReport(
   fileContext: string | null,
   chatHistory: Array<{ role: string; text: string }>,
   fileName: string,
+  facts: string,
+  location: string,
 ): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_API_KEY");
@@ -116,34 +274,38 @@ async function generateReport(
 
   const prompt = `You are a senior report writer for CC Explorations (ccexplorations.com), creating a professional AMRT Survey Report.
 
-Generate a complete, professional report for the survey "${fileName}" using the data and analysis below. Follow CC Explorations' standard reporting format:
+## ABSOLUTE NAMING RULES (NON-NEGOTIABLE):
+- AMRT always expands to exactly "Atomic Mineral Resonance Tomography". Never write "Atomic Minerals", "Resonance Topography", "Active Mineral...", or any other variant. The first mention must be "AMRT (Atomic Mineral Resonance Tomography)"; subsequent mentions use "AMRT".
+- The survey is named by **Location**, not by filename. The location has already been determined for you (see FACTS block below) and you MUST use it verbatim in the title and throughout the report. Title MUST be exactly: "# AMRT Survey Report \u2014 ${location}". Do not use the source filename anywhere in headings or body.
 
-## REPORT STRUCTURE:
-1. **EXECUTIVE SUMMARY** — Brief overview of survey objectives, location, and key findings
-2. **SURVEY METHODOLOGY** — AMRT technology description, satellite sensors used, data acquisition parameters
-3. **SITE DESCRIPTION** — Geographic location, geological setting, known mineralization history
-4. **RESULTS & FINDINGS** — Detailed analysis of detected anomalies, resource classifications, depth ranges, confidence levels
-5. **TARGET PRIORITIZATION** — Ranked list of exploration targets with justification
-6. **RECOMMENDATIONS** — Specific follow-up actions (ground-truthing, drilling, further surveys)
-7. **CONCLUSION** — Summary of findings and commercial potential
+## AUTHORITATIVE FACTS BLOCK
+The following block is the single source of truth. It was deterministically extracted from the survey data by the server. You MUST NOT alter, reorder, round, omit, or invent any value from it. Every depth, confidence, target ID, target count and the rank order must appear in the report exactly as listed here. If a value is "n/a", report it as "not specified" rather than guessing.
+
+--- BEGIN FACTS ---
+${facts || "(no structured entities supplied; describe report as a template only and state that no survey data was provided)"}
+--- END FACTS ---
+
+## GEOLOGY TONE RULES:
+- AMRT is an **initial remote-sensing exploration tool**, not a proven assay. Use hedged language: "interpreted as", "consistent with", "may indicate", "suggests", "potential", "anomaly". Avoid "proven", "confirmed", "definitely", "is a deposit of", "guaranteed".
+- Always state that ground-truthing (drilling, geochemistry, geophysics) is required before any resource or reserve claim.
+- Do not assert JORC / NI 43-101 compliance for the AMRT data itself; only mention these codes for follow-up work.
+
+## REPORT STRUCTURE (use exactly these section headings, in this order):
+1. **EXECUTIVE SUMMARY** \u2014 Survey objectives, location (use ${location}), and key findings drawn only from the FACTS block.
+2. **SURVEY METHODOLOGY** \u2014 AMRT (Atomic Mineral Resonance Tomography) technology description.\n3. **SITE DESCRIPTION** \u2014 Geographic location and geological setting. If the FACTS block contains coordinates use them; otherwise say "Regional geological context not provided in survey input."\n4. **RESULTS & FINDINGS** \u2014 Walk through the targets in the order they appear in RANKED_TARGETS. Quote depth_top_m, depth_bottom_m and confidence_pct verbatim. Report DEPTH_PENETRATION_M as the survey's overall depth penetration.\n5. **TARGET PRIORITIZATION** \u2014 Render the RANKED_TARGETS table verbatim (rank, id, resource, depth top, depth bottom, confidence). Do not re-rank.\n6. **RECOMMENDATIONS** \u2014 Generic ground-truthing follow-up (drilling, soil geochem, ground geophysics). Tie each recommendation to a specific ranked target where reasonable.\n7. **CONCLUSION** \u2014 Summary of findings and indicative \u2014 not proven \u2014 commercial potential.
 
 ## STYLE REQUIREMENTS:
-- Use professional geological terminology (JORC/NI 43-101 compliant)
-- Include specific depth values, coordinates, and measurements from the data
-- Distinguish high-confidence vs speculative interpretations
-- Reference AMRT as CC Explorations' proprietary satellite-based technology
-- Be thorough and detailed — this is a client-facing deliverable
+- Use professional geological terminology, but always hedged.
+- Numbers, target IDs, depths, confidences and ranking come ONLY from the FACTS block.
+- Wording (sentence structure, adjectives, phrasing) may vary between regenerations \u2014 data must not.
 
-${templateExamples ? `## REPORT TEMPLATE EXAMPLES (HIGH PRIORITY)
-Match structure, tone, and section ordering from these approved examples whenever the input context supports it.
---- BEGIN EXAMPLES ---
-${templateExamples}
---- END EXAMPLES ---` : ""}
+${templateExamples ? `## REPORT TEMPLATE EXAMPLES (style/structure only)
+Match structure and tone. Do NOT copy locations, target IDs, depths, or numbers \u2014 those belong to other surveys.\n--- BEGIN EXAMPLES ---\n${templateExamples}\n--- END EXAMPLES ---` : ""}
 
-${fileContext ? `--- LOADED FILE DATA ---\n${fileContext}\n--- END FILE DATA ---` : "No file data loaded. Generate a template report structure."}
+${fileContext ? `## RAW SOURCE EXTRACT (for additional context only \u2014 FACTS block above takes precedence on any conflict)\n${fileContext}` : ""}
 ${chatSummary}
 
-Generate the full report now. Use markdown headings (# ## ###) for structure. Do not use code fences.`;
+Generate the full report now using markdown headings (# ## ###). The first line MUST be: # AMRT Survey Report \u2014 ${location}. Do not use code fences.`;
 
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${encodeURIComponent(apiKey)}`,
@@ -153,7 +315,10 @@ Generate the full report now. Use markdown headings (# ## ###) for structure. Do
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: 0.3,
+          // Low temperature keeps the prose tight, but we don't rely on
+          // it for determinism \u2014 the FACTS block is what guarantees
+          // numbers/locations/ranking stay identical across regenerations.
+          temperature: 0.2,
           topP: 0.9,
           maxOutputTokens: 8192,
         },
@@ -291,11 +456,15 @@ async function buildDocx(
       spacing: { after: 100 },
     }),
   );
+  // Note: the survey-specific title ("AMRT Survey Report — <Location>")
+  // is emitted by the model as the first H1 in the markdown body, so we
+  // intentionally keep this header generic to avoid duplicating /
+  // contradicting the location-based name with the source filename.
   children.push(
     new Paragraph({
       children: [
         new TextRun({
-          text: `AMRT Survey Report — ${fileName}`,
+          text: "AMRT Survey Report",
           bold: true,
           size: 28,
         }),
@@ -448,10 +617,11 @@ async function buildPdf(
     }
   }
 
-  // Title
+  // Title — keep generic; the location-based subtitle comes from the
+  // model's first H1 (see prompt rules in generateReport).
   drawText("CC EXPLORATIONS", { size: 22, font: helveticaBold, color: [0.18, 0.659, 1.0] });
   y -= 6;
-  drawText(`AMRT Survey Report — ${fileName}`, { size: 14, font: helveticaBold, color: [0, 0, 0] });
+  drawText("AMRT Survey Report", { size: 14, font: helveticaBold, color: [0, 0, 0] });
   y -= 4;
   drawText(
     `Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,
