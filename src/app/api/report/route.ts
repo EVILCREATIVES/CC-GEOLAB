@@ -272,14 +272,16 @@ async function generateReport(
     // If DB lookup fails, proceed without template examples.
   }
 
-  const prompt = `You are a senior report writer for CC Explorations (ccexplorations.com), creating a professional AMRT Survey Report.
+  const prompt = `You are a senior exploration geologist and report writer for CC Explorations (ccexplorations.com). You are writing a full, narrative, client-facing AMRT Survey Report — not a data dump. The reader is an investor or project manager who needs prose, interpretation, and context, with the numbers woven in where relevant.
 
 ## ABSOLUTE NAMING RULES (NON-NEGOTIABLE):
-- AMRT always expands to exactly "Atomic Mineral Resonance Tomography". Never write "Atomic Minerals", "Resonance Topography", "Active Mineral...", or any other variant. The first mention must be "AMRT (Atomic Mineral Resonance Tomography)"; subsequent mentions use "AMRT".
-- The survey is named by **Location**, not by filename. The location has already been determined for you (see FACTS block below) and you MUST use it verbatim in the title and throughout the report. Title MUST be exactly: "# AMRT Survey Report \u2014 ${location}". Do not use the source filename anywhere in headings or body.
+- AMRT always expands to exactly "Atomic Mineral Resonance Tomography". Never "Atomic Minerals", "Resonance Topography", "Active Mineral...", or any other variant. The first mention must be "AMRT (Atomic Mineral Resonance Tomography)"; subsequent mentions use "AMRT".
+- The survey is named by **Location**, not by filename. Use the location supplied below verbatim. Title MUST be exactly: "# AMRT Survey Report — ${location}". Do not use the source filename anywhere.
 
-## AUTHORITATIVE FACTS BLOCK
-The following block is the single source of truth. It was deterministically extracted from the survey data by the server. You MUST NOT alter, reorder, round, omit, or invent any value from it. Every depth, confidence, target ID, target count and the rank order must appear in the report exactly as listed here. If a value is "n/a", report it as "not specified" rather than guessing.
+## DATA RULES (the FACTS block is the single source of truth for NUMBERS):
+The block below was extracted from the survey data by the server. When you cite a depth, confidence, target ID, target count, or rank order, it MUST match this block exactly. Do not round, rescale, reorder, or invent numbers. If a value is "n/a", write "not specified in the survey data" (do not guess).
+
+You are NOT required — and should NOT — paste the raw FACTS block as-is into the report. Instead, **interpret** it: explain what the data means, why a target ranks where it does, what the depth distribution implies, what the confidence values suggest about reliability, and so on. The data must appear; the data must not be the entire report.
 
 --- BEGIN FACTS ---
 ${facts || "(no structured entities supplied; describe report as a template only and state that no survey data was provided)"}
@@ -288,24 +290,33 @@ ${facts || "(no structured entities supplied; describe report as a template only
 ## GEOLOGY TONE RULES:
 - AMRT is an **initial remote-sensing exploration tool**, not a proven assay. Use hedged language: "interpreted as", "consistent with", "may indicate", "suggests", "potential", "anomaly". Avoid "proven", "confirmed", "definitely", "is a deposit of", "guaranteed".
 - Always state that ground-truthing (drilling, geochemistry, geophysics) is required before any resource or reserve claim.
-- Do not assert JORC / NI 43-101 compliance for the AMRT data itself; only mention these codes for follow-up work.
+- Do not claim JORC / NI 43-101 compliance for the AMRT data itself; only mention these codes for the follow-up work that would be needed to reach compliance.
 
-## REPORT STRUCTURE (use exactly these section headings, in this order):
-1. **EXECUTIVE SUMMARY** \u2014 Survey objectives, location (use ${location}), and key findings drawn only from the FACTS block.
-2. **SURVEY METHODOLOGY** \u2014 AMRT (Atomic Mineral Resonance Tomography) technology description.\n3. **SITE DESCRIPTION** \u2014 Geographic location and geological setting. If the FACTS block contains coordinates use them; otherwise say "Regional geological context not provided in survey input."\n4. **RESULTS & FINDINGS** \u2014 Walk through the targets in the order they appear in RANKED_TARGETS. Quote depth_top_m, depth_bottom_m and confidence_pct verbatim. Report DEPTH_PENETRATION_M as the survey's overall depth penetration.\n5. **TARGET PRIORITIZATION** \u2014 Render the RANKED_TARGETS table verbatim (rank, id, resource, depth top, depth bottom, confidence). Do not re-rank.\n6. **RECOMMENDATIONS** \u2014 Generic ground-truthing follow-up (drilling, soil geochem, ground geophysics). Tie each recommendation to a specific ranked target where reasonable.\n7. **CONCLUSION** \u2014 Summary of findings and indicative \u2014 not proven \u2014 commercial potential.
+## REPORT STRUCTURE — write each section as flowing prose paragraphs (not just bullet lists):
+1. **EXECUTIVE SUMMARY** — 2–4 paragraphs. What was surveyed, where (${location}), what was found at a high level, what the recommended next steps are. Mention overall depth penetration and total target count in narrative form.
+2. **SURVEY METHODOLOGY** — 2–3 paragraphs explaining AMRT technology in accessible terms: satellite-based remote-sensing, atomic resonance signatures, how depth is inferred, what "confidence" means, and the technology's known limitations.
+3. **SITE DESCRIPTION** — 1–2 paragraphs on geographic location and geological setting. If coordinates are present, mention them in prose (e.g. "centred near 35.28°N, 128.47°E"). If no regional geology is in the source data, say "Regional geological context was not supplied with the survey input and should be added during the desktop study phase." Do NOT invent regional geology.
+4. **RESULTS & FINDINGS** — Several paragraphs of analysis, NOT a table dump. Group targets by resource type or by depth horizon, describe spatial clustering, note the highest-confidence anomalies and the deepest ones, and discuss what the depth penetration (DEPTH_PENETRATION_M) tells us about the survey's reach. Cite specific targets by ID with their depth and confidence inline (e.g. "Target R1c, interpreted at 420–680 m with 92% AMRT confidence, …"). Aim for 4–8 paragraphs.
+5. **TARGET PRIORITIZATION** — Open with 1–2 paragraphs explaining the ranking criteria in plain English (confidence first, then shallower top depth, then ID for tie-breaks) and why that order makes operational sense. Then render the ranked target table as a markdown table with columns "Rank | Target ID | Resource | Depth Top (m) | Depth Bottom (m) | AMRT Confidence (%)" using rows in the order given by RANKED_TARGETS. After the table, add 1–2 paragraphs of commentary highlighting the top 3 priorities and any noteworthy patterns (e.g. clustering, depth trends).
+6. **RECOMMENDATIONS** — Several paragraphs proposing specific follow-up work: which top-ranked targets to drill first, where to run ground geophysics, whether soil geochemistry is warranted, and what budget tier each phase implies. Tie recommendations to specific target IDs from the ranked list.
+7. **CONCLUSION** — 1–2 paragraphs summarising what was found, the indicative (not proven) commercial potential, and the ground-truthing required before any resource estimate.
 
 ## STYLE REQUIREMENTS:
-- Use professional geological terminology, but always hedged.
-- Numbers, target IDs, depths, confidences and ranking come ONLY from the FACTS block.
-- Wording (sentence structure, adjectives, phrasing) may vary between regenerations \u2014 data must not.
+- Write in flowing professional prose. Bullet lists are allowed only inside Recommendations and inside the prioritization table; everything else must be paragraphs.
+- Cite numbers inline within sentences, not as standalone lines.
+- Hedge all geological claims as described above.
+- Aim for a substantive report — roughly 1,200–2,000 words of prose plus the one ranked table.
 
-${templateExamples ? `## REPORT TEMPLATE EXAMPLES (style/structure only)
-Match structure and tone. Do NOT copy locations, target IDs, depths, or numbers \u2014 those belong to other surveys.\n--- BEGIN EXAMPLES ---\n${templateExamples}\n--- END EXAMPLES ---` : ""}
+${templateExamples ? `## REPORT TEMPLATE EXAMPLES (style/structure/voice only)
+Match the **narrative depth and tone** of these approved examples. Do NOT copy their locations, target IDs, depths, or numbers — those belong to other surveys. Use them as a guide for how much prose to write per section.
+--- BEGIN EXAMPLES ---
+${templateExamples}
+--- END EXAMPLES ---` : ""}
 
-${fileContext ? `## RAW SOURCE EXTRACT (for additional context only \u2014 FACTS block above takes precedence on any conflict)\n${fileContext}` : ""}
+${fileContext ? `## RAW SOURCE EXTRACT (additional context — FACTS block takes precedence on any number conflict)\n${fileContext}` : ""}
 ${chatSummary}
 
-Generate the full report now using markdown headings (# ## ###). The first line MUST be: # AMRT Survey Report \u2014 ${location}. Do not use code fences.`;
+Generate the full narrative report now using markdown headings (# ## ###). The first line MUST be: # AMRT Survey Report — ${location}. Do not use code fences. Do not paste the raw FACTS block into the output.`;
 
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${encodeURIComponent(apiKey)}`,
@@ -315,12 +326,12 @@ Generate the full report now using markdown headings (# ## ###). The first line 
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
-          // Low temperature keeps the prose tight, but we don't rely on
-          // it for determinism \u2014 the FACTS block is what guarantees
-          // numbers/locations/ranking stay identical across regenerations.
-          temperature: 0.2,
+          // Slightly warmer for richer narrative prose. The numbers stay
+          // stable because the FACTS block, not the temperature, is what
+          // pins the data.
+          temperature: 0.4,
           topP: 0.9,
-          maxOutputTokens: 8192,
+          maxOutputTokens: 16384,
         },
       }),
     },
