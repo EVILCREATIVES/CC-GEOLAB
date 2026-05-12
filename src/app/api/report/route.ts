@@ -12,12 +12,50 @@ import { prisma } from "@/lib/prisma";
 
 const REPORT_PASSWORD = "ccadmin2026";
 
+// Reverse-geocode a centroid (lat/lon in degrees) to a human place name
+// like "Yongjang, South Korea". Returns null on any failure so the
+// caller can fall back to coordinates or the filename.
+async function reverseGeocode(
+  lat: number,
+  lon: number,
+  apiKey: string,
+): Promise<string | null> {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lon}&result_type=locality|administrative_area_level_2|administrative_area_level_1|country&key=${encodeURIComponent(apiKey)}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = (await r.json()) as {
+      status?: string;
+      results?: Array<{
+        formatted_address?: string;
+        address_components?: Array<{ long_name?: string; types?: string[] }>;
+      }>;
+    };
+    if (j.status !== "OK" || !j.results?.length) return null;
+
+    // Build a "Locality, Country" style label from the first result.
+    const comps = j.results[0].address_components ?? [];
+    const find = (t: string) => comps.find((c) => c.types?.includes(t))?.long_name;
+    const locality =
+      find("locality") ||
+      find("administrative_area_level_2") ||
+      find("administrative_area_level_1");
+    const country = find("country");
+    if (locality && country) return `${locality}, ${country}`;
+    if (country) return country;
+    return j.results[0].formatted_address ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       password?: string;
       format?: "docx" | "pdf" | "google-doc";
       fileContext?: string | null;
+      centroid?: { lat: number; lon: number } | null;
       chatHistory?: Array<{ role: string; text: string }>;
       fileName?: string;
     };
@@ -32,6 +70,18 @@ export async function POST(request: Request) {
         : null;
     const fileName = body.fileName || "AMRT Survey";
 
+    // Resolve a location label from the map centroid (preferred) and
+    // fall back to raw coordinates, then to the filename.
+    const apiKey = process.env.GOOGLE_API_KEY;
+    let location: string | null = null;
+    if (body.centroid && apiKey) {
+      location = await reverseGeocode(body.centroid.lat, body.centroid.lon, apiKey);
+    }
+    if (!location && body.centroid) {
+      location = `${body.centroid.lat.toFixed(4)}\u00B0, ${body.centroid.lon.toFixed(4)}\u00B0`;
+    }
+    if (!location) location = fileName;
+
     const format =
       body.format === "pdf"
         ? "pdf"
@@ -39,40 +89,40 @@ export async function POST(request: Request) {
         ? "google-doc"
         : "docx";
     // Generate report text via Gemini
-    const reportText = await generateReport(fileContext, body.chatHistory ?? [], fileName);
+    const reportText = await generateReport(fileContext, body.chatHistory ?? [], location);
 
     if (format === "google-doc") {
       // Return DOCX bytes; the client uploads them to the user's own
       // Google Drive (per-user OAuth) and converts to a Google Doc.
-      const buffer = await buildDocx(reportText, fileName);
+      const buffer = await buildDocx(reportText, location);
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,
         headers: {
           "Content-Type":
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          "Content-Disposition": `attachment; filename="${sanitizeFilename(fileName)}_Report.docx"`,
-          "X-Report-Filename": sanitizeFilename(fileName),
+          "Content-Disposition": `attachment; filename="${sanitizeFilename(location)}_Report.docx"`,
+          "X-Report-Filename": sanitizeFilename(location),
         },
       });
     }
 
     if (format === "docx") {
-      const buffer = await buildDocx(reportText, fileName);
+      const buffer = await buildDocx(reportText, location);
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,
         headers: {
           "Content-Type":
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          "Content-Disposition": `attachment; filename="${sanitizeFilename(fileName)}_Report.docx"`,
+          "Content-Disposition": `attachment; filename="${sanitizeFilename(location)}_Report.docx"`,
         },
       });
     } else {
-      const buffer = await buildPdf(reportText, fileName);
+      const buffer = await buildPdf(reportText, location);
       return new NextResponse(new Uint8Array(buffer), {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="${sanitizeFilename(fileName)}_Report.pdf"`,
+          "Content-Disposition": `attachment; filename="${sanitizeFilename(location)}_Report.pdf"`,
         },
       });
     }
@@ -91,7 +141,7 @@ function sanitizeFilename(name: string): string {
 async function generateReport(
   fileContext: string | null,
   chatHistory: Array<{ role: string; text: string }>,
-  fileName: string,
+  location: string,
 ): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_API_KEY");
@@ -116,7 +166,7 @@ async function generateReport(
 
   const prompt = `You are a senior report writer for CC Explorations (ccexplorations.com), creating a professional AMRT Survey Report.
 
-Generate a complete, professional report for the survey "${fileName}" using the data and analysis below. Follow CC Explorations' standard reporting format:
+Generate a complete, professional report for the survey at "${location}" using the data and analysis below. The survey is identified by its **location** ("${location}") — do not refer to it by any source filename. Follow CC Explorations' standard reporting format:
 
 ## NAMING — NON-NEGOTIABLE:
 AMRT always expands to exactly "Atomic Mineral Resonance Tomography". Never write "Atomic Minerals", "Resonance Topography", "Active Mineral...", "Resonance Tomography" alone, or any other variant. The first mention must be "AMRT (Atomic Mineral Resonance Tomography)"; every subsequent mention is just "AMRT".
@@ -274,7 +324,7 @@ function parseMarkdown(text: string): ReportBlock[] {
 // ── Build DOCX ──────────────────────────────────────────────
 async function buildDocx(
   reportText: string,
-  fileName: string,
+  title: string,
 ): Promise<Buffer> {
   const blocks = parseMarkdown(reportText);
   const children: Paragraph[] = [];
@@ -298,7 +348,7 @@ async function buildDocx(
     new Paragraph({
       children: [
         new TextRun({
-          text: `AMRT Survey Report — ${fileName}`,
+          text: `AMRT Survey Report — ${title}`,
           bold: true,
           size: 28,
         }),
@@ -395,7 +445,7 @@ async function buildDocx(
 // ── Build PDF ───────────────────────────────────────────────
 async function buildPdf(
   reportText: string,
-  fileName: string,
+  title: string,
 ): Promise<Buffer> {
   const pdfDoc = await PDFDocument.create();
   const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -454,7 +504,7 @@ async function buildPdf(
   // Title
   drawText("CC EXPLORATIONS", { size: 22, font: helveticaBold, color: [0.18, 0.659, 1.0] });
   y -= 6;
-  drawText(`AMRT Survey Report — ${fileName}`, { size: 14, font: helveticaBold, color: [0, 0, 0] });
+  drawText(`AMRT Survey Report — ${title}`, { size: 14, font: helveticaBold, color: [0, 0, 0] });
   y -= 4;
   drawText(
     `Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`,

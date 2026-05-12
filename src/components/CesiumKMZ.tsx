@@ -778,6 +778,19 @@ ${rows.join("")}
         const folderSet = new Set<string>();
         const entities: GeoEntity[] = [];
 
+        // Accumulate Cartesian positions to derive a survey centroid
+        // (used by the report generator for location-based titling).
+        let sumX = 0, sumY = 0, sumZ = 0, posCount = 0;
+        const accumulatePos = (p: any) => {
+          if (!p) return;
+          try {
+            const v = typeof p.getValue === "function" ? p.getValue(now) : p;
+            if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
+              sumX += v.x; sumY += v.y; sumZ += v.z; posCount += 1;
+            }
+          } catch { /* skip */ }
+        };
+
         for (const e of dsLocal.entities.values) {
           const folder = e.parent?.name || "(root)";
           folderSet.add(folder);
@@ -787,6 +800,22 @@ ${rows.join("")}
           else if (e.polyline) type = "polyline";
           else if (e.polygon) type = "polygon";
           else if (e.label) type = "label";
+
+          // Pull a representative position for centroid math.
+          if (e.position) {
+            accumulatePos(e.position);
+          } else if (e.polyline?.positions) {
+            try {
+              const pts = e.polyline.positions.getValue?.(now) ?? [];
+              for (const pt of pts) accumulatePos(pt);
+            } catch { /* skip */ }
+          } else if (e.polygon?.hierarchy) {
+            try {
+              const h = e.polygon.hierarchy.getValue?.(now);
+              const pts = h?.positions ?? [];
+              for (const pt of pts) accumulatePos(pt);
+            } catch { /* skip */ }
+          }
 
           const props: Record<string, string | number> = {};
           if (e.properties) {
@@ -832,12 +861,29 @@ ${rows.join("")}
         let llmContext = lines.join("\n");
         if (llmContext.length > 6000) llmContext = llmContext.slice(0, 5950) + "\n... (truncated)";
 
+        // Convert centroid Cartesian → lat/lon (degrees) so the report
+        // generator can reverse-geocode it to a place name.
+        let centroid: { lat: number; lon: number } | null = null;
+        if (posCount > 0) {
+          try {
+            const c = new Cesium.Cartesian3(sumX / posCount, sumY / posCount, sumZ / posCount);
+            const carto = Cesium.Cartographic.fromCartesian(c);
+            if (carto) {
+              centroid = {
+                lat: Cesium.Math.toDegrees(carto.latitude),
+                lon: Cesium.Math.toDegrees(carto.longitude),
+              };
+            }
+          } catch { /* ignore */ }
+        }
+
         const summary: GeoFileSummary = {
           fileName,
           folderNames: [...folderSet],
           entityCount: entities.length,
           entities,
           llmContext,
+          centroid,
         };
         setSummary(summary);
       }
@@ -2002,6 +2048,7 @@ function ReportExportSection() {
             password: reportPassword,
             format,
             fileContext: summary?.llmContext ?? null,
+            centroid: summary?.centroid ?? null,
             chatHistory: [],
             fileName: summary?.fileName ?? "AMRT Survey",
           }),
@@ -2030,6 +2077,7 @@ function ReportExportSection() {
           password: reportPassword,
           format,
           fileContext: summary?.llmContext ?? null,
+          centroid: summary?.centroid ?? null,
           chatHistory: [],
           fileName: summary?.fileName ?? "AMRT Survey",
         }),

@@ -16,6 +16,8 @@ export type GeoFileSummary = {
   entities: GeoEntity[];
   /** compact text block for LLM context (truncated to ~6k chars) */
   llmContext: string;
+  /** centroid of all entities on the map, used for location-based titling */
+  centroid: { lat: number; lon: number } | null;
 };
 
 export type UserInfo = {
