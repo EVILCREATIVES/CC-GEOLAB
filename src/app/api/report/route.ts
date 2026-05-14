@@ -68,13 +68,29 @@ export async function POST(request: Request) {
       typeof body.fileContext === "string"
         ? body.fileContext.slice(0, 8000)
         : null;
-    const fileName = body.fileName || "AMRT Survey";
+    const rawFileName = typeof body.fileName === "string" ? body.fileName.trim() : "";
+    // Strip a trailing extension so a filename like "Yongjang.kmz" reads
+    // cleanly as a location label.
+    const cleanedFileName = rawFileName.replace(/\.[a-zA-Z0-9]{1,5}$/, "").trim();
+    // Treat the generic default as "no real name provided".
+    const hasUserLocationName =
+      cleanedFileName.length > 0 &&
+      cleanedFileName.toLowerCase() !== "amrt survey" &&
+      cleanedFileName.toLowerCase() !== "amrt_survey";
+    const fileName = cleanedFileName || "AMRT Survey";
 
-    // Resolve a location label from the map centroid (preferred) and
-    // fall back to raw coordinates, then to the filename.
+    // Resolve a location label. Preference order:
+    //   1. The user-supplied location/file name (the name on the map),
+    //      when it isn't the generic "AMRT Survey" default.
+    //   2. Reverse-geocoded "Locality, Country" from the map centroid.
+    //   3. Raw centroid coordinates.
+    //   4. Final fallback to the (default) filename.
     const apiKey = process.env.GOOGLE_API_KEY;
     let location: string | null = null;
-    if (body.centroid && apiKey) {
+    if (hasUserLocationName) {
+      location = cleanedFileName;
+    }
+    if (!location && body.centroid && apiKey) {
       location = await reverseGeocode(body.centroid.lat, body.centroid.lon, apiKey);
     }
     if (!location && body.centroid) {
