@@ -2038,6 +2038,10 @@ function ReportExportSection() {
     //    Drive to convert to a Google Doc on the way in.
     // 4. Open the resulting doc URL in a new tab.
     if (format === "google-doc") {
+      // Open the tab SYNCHRONOUSLY in the click handler so popup
+      // blockers treat it as a user gesture. We'll point it at the
+      // real URL once the upload finishes.
+      const pendingWin = window.open("about:blank", "_blank");
       try {
         const accessToken = await getGoogleDriveToken();
         setReportStatus("Generating report…");
@@ -2061,9 +2065,22 @@ function ReportExportSection() {
         setReportStatus("Uploading to your Google Drive…");
         const safe = (summary?.fileName || "AMRT_Survey").replace(/[^a-zA-Z0-9 _\-().]/g, "").trim() || "AMRT_Survey";
         const docUrl = await uploadToGoogleDrive(accessToken, docxBlob, `${safe} — AMRT Report`);
-        window.open(docUrl, "_blank");
-        setReportStatus("Opened in Google Docs.");
+        if (pendingWin && !pendingWin.closed) {
+          // Reuse the tab we opened during the click.
+          pendingWin.location.href = docUrl;
+          setReportStatus("Opened in Google Docs.");
+        } else {
+          // Popup was blocked or closed. Try one more open(), then
+          // surface a clickable link as a fallback.
+          const opened = window.open(docUrl, "_blank", "noopener,noreferrer");
+          if (opened) {
+            setReportStatus("Opened in Google Docs.");
+          } else {
+            setReportStatus(`Doc ready: ${docUrl}`);
+          }
+        }
       } catch (err) {
+        if (pendingWin && !pendingWin.closed) pendingWin.close();
         setReportError(err instanceof Error ? err.message : "Error.");
       } finally { setReportLoading(null); }
       return;
