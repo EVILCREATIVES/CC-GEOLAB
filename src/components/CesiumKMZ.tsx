@@ -154,7 +154,7 @@ export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { setSummary, user } = useGeoData();
+  const { setSummary, setProcessedKml, user } = useGeoData();
   const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
@@ -893,6 +893,8 @@ ${rows.join("")}
         if (ds) viewer.dataSources.remove(ds, true);
 
         const name = (file.name || "upload").toLowerCase();
+        // Any previously converted KML no longer matches what's on screen.
+        setProcessedKml(null);
 
         const loadKmlXml = async (xml: Document, sourceName: string) => {
           ds = await Cesium.KmlDataSource.load(xml, {
@@ -983,6 +985,8 @@ ${rows.join("")}
 
                 setStatus("Loading 3D data into viewer…");
                 await loadServerKml(kmlText, file.name);
+                // Keep the converted KML around so it can be downloaded as a KMZ.
+                setProcessedKml({ fileName: file.name || "upload", kml: kmlText });
                 setStatus("3D conversion complete ✓");
                 serverOk = true;
               } else {
@@ -1012,6 +1016,7 @@ ${rows.join("")}
               const kml3d = transformKmlFor3D(kmlText);
               const xml = new DOMParser().parseFromString(kml3d, "application/xml");
               await loadKmlXml(xml, file.name);
+              setProcessedKml({ fileName: file.name || "upload", kml: kml3d });
               setStatus("Loaded (client-side 3D fallback)");
             }
             return;
@@ -1659,7 +1664,7 @@ ${rows.join("")}
       (rootNode || document).querySelectorAll(".dj-wrap").forEach((n) => n.remove());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setSummary]);
+  }, [setSummary, setProcessedKml]);
 
   // Keep userId in sync on the root element so the inline upload handler can read it
   useEffect(() => {
@@ -2009,11 +2014,12 @@ async function uploadToGoogleDrive(
 }
 
 function ReportExportSection() {
-  const { summary } = useGeoData();
+  const { summary, processedKml } = useGeoData();
   const [reportPassword, setReportPassword] = React.useState("");
   const [reportLoading, setReportLoading] = React.useState<"pdf" | "docx" | "google-doc" | null>(null);
   const [reportError, setReportError] = React.useState<string | null>(null);
   const [reportStatus, setReportStatus] = React.useState<string | null>(null);
+  const [kmzLoading, setKmzLoading] = React.useState(false);
 
   const inputSt: React.CSSProperties = {
     background: "rgba(255,255,255,0.06)", border: "1px solid rgba(137,168,201,0.2)",
@@ -2117,6 +2123,30 @@ function ReportExportSection() {
     } finally { setReportLoading(null); }
   }
 
+  // Re-zip the 3D-converted KML that's currently in the viewer and download
+  // it as a KMZ. No password needed — it's the user's own data.
+  async function downloadKmz() {
+    if (!processedKml) { setReportError("Load & convert a KMZ/KML first."); return; }
+    setReportError(null); setReportStatus(null); setKmzLoading(true);
+    try {
+      const JSZipLib = await waitForGlobal("JSZip", 8000);
+      if (!JSZipLib) throw new Error("Zip library not loaded. Reload the page and retry.");
+      const zip = new JSZipLib();
+      zip.file("doc.kml", processedKml.kml);
+      const blob: Blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+      const base = processedKml.fileName.replace(/\.(kmz|kml)$/i, "");
+      const safe = base.replace(/[^a-zA-Z0-9 _\-().]/g, "").trim() || "AMRT_Survey";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${safe}_3D.kmz`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      setReportStatus(`Downloaded ${safe}_3D.kmz`);
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : "KMZ export failed.");
+    } finally { setKmzLoading(false); }
+  }
+
   return (
     <details style={{ marginTop: 2 }}>
       <summary style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
@@ -2140,6 +2170,14 @@ function ReportExportSection() {
         </div>
         <button onClick={() => runReport("google-doc")} disabled={Boolean(reportLoading)} style={{ ...btnSt, background: "#1a73e8", opacity: reportLoading ? 0.6 : 1 }}>
           {reportLoading === "google-doc" ? "…" : "Open in Google Docs"}
+        </button>
+        <button
+          onClick={downloadKmz}
+          disabled={kmzLoading || !processedKml}
+          title={processedKml ? "Download the 3D-converted KMZ currently in the viewer" : "Load & convert a KMZ/KML first"}
+          style={{ ...btnSt, background: "#2f8f4e", opacity: kmzLoading || !processedKml ? 0.5 : 1, cursor: processedKml ? "pointer" : "not-allowed" }}
+        >
+          {kmzLoading ? "…" : "⬇ Download 3D KMZ"}
         </button>
         {reportError && <p style={{ color: "#f66", margin: 0, fontSize: 11 }}>{reportError}</p>}
         {reportStatus && <p style={{ color: "#4af", margin: 0, fontSize: 11 }}>{reportStatus}</p>}

@@ -28,9 +28,19 @@ export type UserInfo = {
   company: string;
 };
 
+/** The 3D-converted KML currently loaded in the viewer, ready to be re-zipped as a KMZ. */
+export type ProcessedKml = {
+  /** source file name the KML was derived from (e.g. "survey.kmz") */
+  fileName: string;
+  /** full KML text after DEM/3D conversion (and geoid correction, when applied) */
+  kml: string;
+};
+
 type GeoDataContextType = {
   summary: GeoFileSummary | null;
   setSummary: (s: GeoFileSummary | null) => void;
+  processedKml: ProcessedKml | null;
+  setProcessedKml: (p: ProcessedKml | null) => void;
   user: UserInfo | null;
   setUser: (u: UserInfo | null) => void;
 };
@@ -38,17 +48,23 @@ type GeoDataContextType = {
 const GeoDataContext = createContext<GeoDataContextType>({
   summary: null,
   setSummary: () => {},
+  processedKml: null,
+  setProcessedKml: () => {},
   user: null,
   setUser: () => {},
 });
 
 export function GeoDataProvider({ children }: { children: ReactNode }) {
   const [summary, setSummaryRaw] = useState<GeoFileSummary | null>(null);
+  const [processedKml, setProcessedKmlRaw] = useState<ProcessedKml | null>(null);
   const [user, setUserRaw] = useState<UserInfo | null>(null);
   const setSummary = useCallback((s: GeoFileSummary | null) => setSummaryRaw(s), []);
+  const setProcessedKml = useCallback((p: ProcessedKml | null) => setProcessedKmlRaw(p), []);
   const setUser = useCallback((u: UserInfo | null) => setUserRaw(u), []);
   return (
-    <GeoDataContext.Provider value={{ summary, setSummary, user, setUser }}>
+    <GeoDataContext.Provider
+      value={{ summary, setSummary, processedKml, setProcessedKml, user, setUser }}
+    >
       {children}
     </GeoDataContext.Provider>
   );
