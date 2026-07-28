@@ -304,6 +304,8 @@ ${rows.join("")}
       const chkCol = $<HTMLInputElement>("chkCol");
 
       const alpha = $<HTMLInputElement>("alpha");
+      const opFeat = $<HTMLInputElement>("opFeat");
+      const opSurvey = $<HTMLInputElement>("opSurvey");
       const rad = $<HTMLInputElement>("rad");
       const btnLoad = $<HTMLButtonElement>("btnLoad");
 
@@ -459,6 +461,32 @@ ${rows.join("")}
         return null;
       }
 
+      // ── Survey-area boundaries ───────────────────────────────
+      // The research outlines ("1 sq mile", "half sq mile", …). Google Earth
+      // exports them unfilled, which makes them invisible once they are lifted
+      // onto 3D terrain, so we give them a translucent face of our own.
+      const SURVEY_COLOR = Cesium.Color.fromBytes(0, 229, 255, 255);
+
+      function isSurveyAreaEntity(e: any): boolean {
+        if (!e.polygon) return false;
+        for (let node = e, i = 0; node && i < 5; node = node.parent, i++) {
+          if (/\bsurvey\s*area\b/i.test(node.name || "")) return true;
+        }
+        return /\b(sq|square)\s*(mile|miles|km|kilometre|kilometer)\b/i.test(e.name || "");
+      }
+
+      function styleSurveyAreas() {
+        if (!ds) return;
+        for (const e of ds.entities.values) {
+          if (!isSurveyAreaEntity(e) || is3dDepth(e)) continue;
+          e.polygon.fill = true;
+          e.polygon.material = SURVEY_COLOR.withAlpha(0.25);
+          e.polygon.outline = true;
+          e.polygon.outlineColor = SURVEY_COLOR.withAlpha(0.95);
+          e.polygon.outlineWidth = 2;
+        }
+      }
+
       function drapePolygonToGround(pg: any, owner?: any) {
         const name = (owner?.name || "").toLowerCase();
         if (/\bmin depth polygon\b/.test(name) || /\bmax depth polygon\b/.test(name)) {
@@ -576,6 +604,92 @@ ${rows.join("")}
           c.cylinder.topRadius = r;
           c.cylinder.bottomRadius = r;
         }
+        viewer.scene.requestRender();
+      }
+
+      // ── Global opacity ───────────────────────────────────────
+      // Scales the alpha of every rendered feature from the toolbar sliders.
+      // Each graphic's authored alpha is remembered the first time it is
+      // touched, so dragging the slider back and forth is lossless instead of
+      // compounding towards zero.
+      function readColor(p: any): any | null {
+        if (!p) return null;
+        if (p instanceof Cesium.Color) return p;
+        const now = Cesium.JulianDate.now();
+        try {
+          if (p.color) {
+            const c = p.color;
+            const v = c?.getValue ? c.getValue(now) : c;
+            return v instanceof Cesium.Color ? v : null;
+          }
+          if (p.getValue) {
+            const v = p.getValue(now);
+            return v instanceof Cesium.Color ? v : null;
+          }
+        } catch { /* not a colour-valued property */ }
+        return null;
+      }
+
+      function writeColor(owner: any, key: string, col: any) {
+        const p = owner[key];
+        // Assign through the material's own colour when there is one, so
+        // dashed-line and other material types keep their pattern.
+        if (p && !(p instanceof Cesium.Color) && p.color !== undefined) p.color = col;
+        else owner[key] = col;
+      }
+
+      function sliderFraction(el: HTMLInputElement | null, fallback: number) {
+        const raw = Number(el?.value);
+        return Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : fallback)) / 100;
+      }
+
+      // Map a slider position to an alpha, pivoting on the slider's own
+      // default: at the default the feature keeps its authored alpha, 0 fades
+      // it out completely and 100 makes it fully solid.
+      function curveAlpha(baseAlpha: number, k: number, pivot: number) {
+        if (k <= pivot) return pivot <= 0 ? 0 : baseAlpha * (k / pivot);
+        return baseAlpha + (1 - baseAlpha) * ((k - pivot) / (1 - pivot));
+      }
+
+      const OP_FEATURE_DEFAULT = 0.7;
+      const OP_SURVEY_DEFAULT = 0.25;
+
+      function applyFeatureOpacity() {
+        const kFeature = sliderFraction(opFeat, OP_FEATURE_DEFAULT * 100);
+        const kSurvey = sliderFraction(opSurvey, OP_SURVEY_DEFAULT * 100);
+        const all = [...(ds ? ds.entities.values : []), ...columnEntities];
+
+        for (const e of all) {
+          const isSurvey = isSurveyAreaEntity(e);
+          const k = isSurvey ? kSurvey : kFeature;
+          const pivot = isSurvey ? OP_SURVEY_DEFAULT : OP_FEATURE_DEFAULT;
+          const base = e.__baseAlpha || (e.__baseAlpha = {});
+
+          const touch = (owner: any, key: string, slot: string) => {
+            if (!owner) return;
+            const col = readColor(owner[key]);
+            if (!col) return;
+            if (base[slot] === undefined) base[slot] = col.alpha;
+            const a = Math.max(0, Math.min(1, curveAlpha(base[slot], k, pivot)));
+            writeColor(owner, key, col.withAlpha(a));
+          };
+
+          // Outlines carry a higher authored alpha than fills, so they stay
+          // readable as the fill is dialled down without special-casing.
+          touch(e.polygon, "material", "polygonFill");
+          touch(e.polygon, "outlineColor", "polygonLine");
+          touch(e.polyline, "material", "polylineColor");
+          touch(e.cylinder, "material", "cylinderFill");
+          touch(e.point, "color", "pointColor");
+          touch(e.billboard, "color", "billboardColor");
+          touch(e.label, "fillColor", "labelFill");
+          touch(e.label, "outlineColor", "labelLine");
+        }
+        viewer.scene.requestRender();
+      }
+
+      function applyGlobeOpacity() {
+        viewer.scene.globe.translucency.frontFaceAlpha = sliderFraction(alpha, 40);
         viewer.scene.requestRender();
       }
 
@@ -699,12 +813,15 @@ ${rows.join("")}
           if (e.label) e.label.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
         }
 
+        styleSurveyAreas();
+
         await buildColumnsByFolder();
         applyVisibilityFilters();
 
-        const a = Math.max(0, Math.min(100, Number(alpha?.value) || 40)) / 100;
-        viewer.scene.globe.translucency.frontFaceAlpha = a;
-        viewer.scene.requestRender();
+        // Opacity is applied last: it reads whatever colours the passes above
+        // settled on, and it must include the columns just built.
+        applyFeatureOpacity();
+        applyGlobeOpacity();
       }
 
       async function flyCloserToDataSource(dsLocal: any) {
@@ -1076,11 +1193,15 @@ ${rows.join("")}
         }),
       );
 
-      alpha?.addEventListener("input", () => {
-        const a = Math.max(0, Math.min(100, Number(alpha?.value) || 40)) / 100;
-        viewer.scene.globe.translucency.frontFaceAlpha = a;
-        viewer.scene.requestRender();
-      });
+      const showPct = (el: HTMLInputElement | null) => {
+        if (!el) return;
+        const out = document.getElementById(`${el.id}Val`);
+        if (out) out.textContent = `${el.value}%`;
+      };
+
+      alpha?.addEventListener("input", () => { showPct(alpha); applyGlobeOpacity(); });
+      opFeat?.addEventListener("input", () => { showPct(opFeat); applyFeatureOpacity(); });
+      opSurvey?.addEventListener("input", () => { showPct(opSurvey); applyFeatureOpacity(); });
 
       rad?.addEventListener("input", () => updateColumnRadius());
 
@@ -1832,6 +1953,17 @@ ${rows.join("")}
 
             <tr>
               <td>
+                <div style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2 }}>
+                  <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Opacity</div>
+                  <OpacitySlider id="opFeat" label="Features" defaultValue={70} />
+                  <OpacitySlider id="opSurvey" label="Survey area" defaultValue={25} />
+                  <OpacitySlider id="alpha" label="Terrain" defaultValue={40} />
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td>
                 <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Legend</div>
                 <div
                   style={{
@@ -1876,6 +2008,30 @@ ${rows.join("")}
       </div>
       {adminOpen && <AdminPanel mode="overlay" onClose={() => setAdminOpen(false)} />}
     </div>
+  );
+}
+
+/**
+ * Opacity slider. Kept as plain DOM ids so the Cesium effect (which is all
+ * imperative) can read the value the same way it reads the checkboxes.
+ */
+function OpacitySlider({ id, label, defaultValue }: { id: string; label: string; defaultValue: number }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "3px 0" }}>
+      <span style={{ width: 72, fontSize: 11, color: "#ccc" }}>{label}</span>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        defaultValue={defaultValue}
+        style={{ flex: 1, minWidth: 90, accentColor: "#4af" }}
+      />
+      <span id={`${id}Val`} style={{ width: 34, textAlign: "right", fontSize: 11, color: "#4af" }}>
+        {defaultValue}%
+      </span>
+    </label>
   );
 }
 

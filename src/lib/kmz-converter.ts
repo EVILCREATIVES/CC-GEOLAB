@@ -79,9 +79,19 @@ function toMeters(value: number, unit: string | null, defaultUnit = "m"): number
   return value;
 }
 
+/**
+ * A DMS coordinate label — 29°34'2.7272"N / 29°21'42.6874"E — is not a depth.
+ * Without this guard the ' and " minute/second marks read as feet/inches and
+ * every coordinate pin sprouts a bogus depth structure.
+ */
+function looksLikeDmsCoordinate(s: string): boolean {
+  return /\d\s*°/.test(s) || /\d\s*['′]\s*[\d.]+\s*["″]?\s*[NSEW]\b/i.test(s);
+}
+
 export function extractDepthRange(name: string, defaultUnit = "m"): [number, number] | null {
   if (!name) return null;
   const s = name.trim();
+  if (looksLikeDmsCoordinate(s)) return null;
 
   // Pattern A: dual slash-separated ranges — "F1a/ 4426-4474/ 5364-5379'"
   // Returns the envelope (outermost bounds) of both ranges
@@ -200,6 +210,61 @@ function whichCommodityFromAncestors(el: Element): string | null {
 
 function isSurveyArea(name: string): boolean {
   return /\bSurvey\s*Area\b/i.test(name || "");
+}
+
+/**
+ * Survey boundaries are usually named for their size ("1 sq mile",
+ * "half sq mile") and only identifiable by the folder they sit in.
+ */
+function isInSurveyAreaFolder(placemark: Element): boolean {
+  for (let n = placemark.parentNode as Element | null; n; n = n.parentNode as Element | null) {
+    if (n.localName === "Folder" || n.localName === "Document") {
+      const nm = findKmlOne(n, "kml:name")?.textContent || "";
+      if (isSurveyArea(nm)) return true;
+    }
+  }
+  return false;
+}
+
+const SURVEY_STYLE_ID = "ccSurveyArea";
+
+/**
+ * Give survey-area polygons a translucent fill.
+ *
+ * Google Earth exports these boundaries with <fill>0</fill> and a thin black
+ * outline, which works on a flat 2D map but vanishes once the outline is
+ * lifted onto 3D terrain. A filled, see-through face keeps the research area
+ * legible from any camera angle without hiding what is under it.
+ */
+function styleSurveyArea(placemark: Element, doc: Document) {
+  if (!findKmlOne(placemark, ".//kml:Polygon")) return;
+
+  ensureSurveyStyle(doc);
+  const ref = findKmlOne(placemark, "kml:styleUrl");
+  if (ref) ref.textContent = `#${SURVEY_STYLE_ID}`;
+  else placemark.insertBefore(kmlEl(doc, "styleUrl", `#${SURVEY_STYLE_ID}`), placemark.firstChild);
+}
+
+function ensureSurveyStyle(doc: Document) {
+  if (findKml(doc, `//kml:Style[@id='${SURVEY_STYLE_ID}']`).length) return;
+  const docEl = findKmlOne(doc, "//kml:Document") || doc.documentElement;
+  if (!docEl) return;
+
+  const style = kmlEl(doc, "Style");
+  style.setAttribute("id", SURVEY_STYLE_ID);
+
+  const line = kmlEl(doc, "LineStyle");
+  line.appendChild(kmlEl(doc, "color", "ff00e5ff")); // aabbggrr — opaque cyan
+  line.appendChild(kmlEl(doc, "width", "2"));
+  style.appendChild(line);
+
+  const poly = kmlEl(doc, "PolyStyle");
+  poly.appendChild(kmlEl(doc, "color", "3300e5ff")); // 20% cyan fill
+  poly.appendChild(kmlEl(doc, "fill", "1"));
+  poly.appendChild(kmlEl(doc, "outline", "1"));
+  style.appendChild(poly);
+
+  docEl.insertBefore(style, docEl.firstChild);
 }
 
 function isDeposit(name: string): boolean {
@@ -330,30 +395,59 @@ function getTextContent(el: Element, childTag: string): string {
   return child?.textContent?.trim() || "";
 }
 
+/**
+ * Write <altitudeMode> onto every geometry in `elem`, on the element the
+ * renderer actually reads it from.
+ *
+ * The subtlety that matters: a <LinearRing> inside a <Polygon> has its own
+ * altitudeMode/tessellate/extrude in the KML schema, but they are IGNORED —
+ * the Polygon's values win. Writing "absolute" on the ring therefore leaves
+ * the polygon on its default clampToGround, the per-vertex heights get
+ * discarded, and the shape drops to sea level (i.e. it disappears under the
+ * terrain anywhere above sea level). So Polygon must be handled before
+ * LinearRing, and the ring's own conflicting tags stripped.
+ */
 function setAltitudeMode(elem: Element, mode: string) {
   const resolved = mode === "clampToGround" ? "absolute" : mode;
-  // remove gx:altitudeMode
-  for (const gx of findKml(elem, ".//gx:altitudeMode")) {
-    gx.parentNode?.removeChild(gx);
-  }
-  // set or create kml:altitudeMode
-  const existing = findKml(elem, ".//kml:altitudeMode");
-  if (existing.length) {
-    existing[0].textContent = resolved;
-  } else {
-    for (const tag of ["Point", "LineString", "LinearRing", "Polygon"]) {
-      const geom = findKmlOne(elem, `.//kml:${tag}`);
-      if (geom) {
-        const am = kmlEl(geom.ownerDocument!, "altitudeMode", resolved);
-        const coordsEl = findKmlOne(geom, ".//kml:coordinates");
-        if (coordsEl) {
-          geom.insertBefore(am, coordsEl);
-        } else {
-          geom.appendChild(am);
-        }
-        break;
-      }
+  const doc = elem.ownerDocument!;
+
+  // Drop every pre-existing altitude tag in this subtree — including ones a
+  // previous pass may have put in the wrong place — then re-write them.
+  for (const gx of findKml(elem, ".//gx:altitudeMode")) gx.parentNode?.removeChild(gx);
+  for (const am of findKml(elem, ".//kml:altitudeMode")) am.parentNode?.removeChild(am);
+
+  const applyTo = (geom: Element, isPolygon: boolean) => {
+    const am = kmlEl(doc, "altitudeMode", resolved);
+    if (isPolygon) {
+      // Schema order: extrude, tessellate, altitudeMode, outerBoundaryIs.
+      // tessellate on an absolute polygon means "follow the ground", which
+      // fights the heights we just injected — drop it here and in the rings.
+      for (const t of findKml(geom, ".//kml:tessellate")) t.parentNode?.removeChild(t);
+      const boundary = findKmlOne(geom, "kml:outerBoundaryIs") || findKmlOne(geom, "kml:innerBoundaryIs");
+      if (boundary) geom.insertBefore(am, boundary);
+      else geom.appendChild(am);
+      return;
     }
+    const coordsEl = findKmlOne(geom, "kml:coordinates");
+    if (coordsEl) geom.insertBefore(am, coordsEl);
+    else geom.appendChild(am);
+  };
+
+  // descendant-or-self:: so this works whether it is handed a Placemark, a
+  // MultiGeometry, or a bare geometry element.
+  // Polygon first so its rings are already covered; a LinearRing is only
+  // addressed directly when it stands outside a Polygon.
+  for (const poly of findKml(elem, "descendant-or-self::kml:Polygon")) applyTo(poly, true);
+  for (const tag of ["Point", "LineString"]) {
+    for (const geom of findKml(elem, `descendant-or-self::kml:${tag}`)) applyTo(geom, false);
+  }
+  for (const ring of findKml(elem, "descendant-or-self::kml:LinearRing")) {
+    let inPolygon = false;
+    for (let n = ring.parentNode as Element | null; n; n = n.parentNode as Element | null) {
+      if (n.localName === "Polygon") { inPolygon = true; break; }
+      if (n.localName === "Placemark") break;
+    }
+    if (!inPolygon) applyTo(ring, false);
   }
 }
 
@@ -465,8 +559,9 @@ function createDepositVolumePlacemarks(
     const pm = kmlEl(doc, "Placemark");
     pm.appendChild(kmlEl(doc, "name", pmName));
     const poly = kmlEl(doc, "Polygon");
-    poly.appendChild(kmlEl(doc, "tessellate", "0"));
+    // Schema order is extrude, tessellate, altitudeMode, outerBoundaryIs.
     poly.appendChild(kmlEl(doc, "extrude", "0"));
+    poly.appendChild(kmlEl(doc, "tessellate", "0"));
     poly.appendChild(kmlEl(doc, "altitudeMode", altMode));
     const outer = kmlEl(doc, "outerBoundaryIs");
     const lr = kmlEl(doc, "LinearRing");
@@ -499,18 +594,6 @@ function createDepositVolumePlacemarks(
 }
 
 // ── Survey area clamping ───────────────────────────────────────
-function clampSurveyArea(placemark: Element) {
-  for (const tag of ["Point", "LineString", "LinearRing", "Polygon"]) {
-    for (const ge of findKml(placemark, `.//kml:${tag}`)) {
-      for (const coordsEl of findKml(ge, ".//kml:coordinates")) {
-        const coords = parseCoords(coordsEl.textContent || "");
-        coordsEl.textContent = coords.map(([lon, lat]) => `${lon.toFixed(8)},${lat.toFixed(8)},0.000`).join(" ");
-      }
-      setAltitudeMode(ge, "absolute");
-    }
-  }
-}
-
 // ── Inject altitudes into coordinate text ──────────────────────
 function injectAltitudes(
   text: string,
@@ -667,17 +750,20 @@ export async function processKml(
   for (const placemark of placemarks) {
     const pmName = getTextContent(placemark, "name");
 
-    // Survey Area → absolute Z=0
-    if (isSurveyArea(pmName)) {
-      clampSurveyArea(placemark);
-      continue;
-    }
+    // Survey-area outlines used to be pinned to absolute Z=0, which puts them
+    // at sea level — i.e. hundreds of metres below the ground anywhere inland.
+    // They now take DEM elevations like every other geometry, so they sit on
+    // the surface of the survey. They are still excluded from depth-structure
+    // generation below (they are boundaries, not deposits).
+    const surveyArea = isSurveyArea(pmName) || isInSurveyAreaFolder(placemark);
+    if (surveyArea) styleSurveyArea(placemark, doc);
 
     // Disable extrusion
     for (const tag of ["LineString", "Polygon"]) {
       for (const geom of findKml(placemark, `.//kml:${tag}`)) {
         let extr = findKmlOne(geom, "kml:extrude");
-        if (!extr) { extr = kmlEl(doc, "extrude", "0"); geom.appendChild(extr); }
+        // <extrude> must lead the geometry's children to stay schema-valid
+        if (!extr) { extr = kmlEl(doc, "extrude", "0"); geom.insertBefore(extr, geom.firstChild); }
         else extr.textContent = "0";
 
         if (tag === "LineString" && mode === "clampToGround") {
@@ -691,14 +777,14 @@ export async function processKml(
     // Inject altitudes into all coords
     const coordNodes = findKml(placemark, ".//kml:Point/kml:coordinates | .//kml:LineString/kml:coordinates | .//kml:LinearRing/kml:coordinates");
     for (const node of coordNodes) {
-      const geom = node.parentNode as Element;
-      const parentGeom = geom?.parentNode as Element;
       node.textContent = injectAltitudes(node.textContent || "", fetchElev, offsetM, datumOffsetM, mode);
-      setAltitudeMode(parentGeom || geom, mode);
     }
+    // Stamp the mode once, from the Placemark, so every geometry gets it on
+    // the element the renderer reads (see setAltitudeMode).
+    if (coordNodes.length) setAltitudeMode(placemark, mode);
 
     // Generate 3D structures from depth-encoded points
-    if (useDepthFromNames && findKmlOne(placemark, ".//kml:Point")) {
+    if (useDepthFromNames && !surveyArea && findKmlOne(placemark, ".//kml:Point")) {
       const rng = extractDepthRange(pmName);
       if (rng) {
         const ptCoords = findKmlOne(placemark, ".//kml:Point//kml:coordinates");
