@@ -70,6 +70,65 @@ export async function rezipKmlToKmz(kmlBuf: Buffer, originalKmz?: Buffer): Promi
   return buf;
 }
 
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+  gif: "image/gif", bmp: "image/bmp", webp: "image/webp", svg: "image/svg+xml",
+};
+
+/** Images bigger than this are left as dangling refs rather than bloating the response. */
+const MAX_INLINE_ASSET_BYTES = 6 * 1024 * 1024;
+
+/**
+ * Rewrite <Icon><href> entries that point at files packed inside the KMZ
+ * into self-contained data: URIs.
+ *
+ * The pipeline hands the browser bare KML, so a relative href like
+ * "files/overlay.png" has nothing to resolve against — Cesium then draws the
+ * GroundOverlay as a blank grey rectangle. Inlining keeps overlays working
+ * through the conversion and the KMZ re-zip.
+ */
+export async function inlineKmzAssets(kmlBuf: Buffer, kmzBuf: Buffer): Promise<Buffer> {
+  let kml = kmlBuf.toString("utf-8");
+  if (!/<href>/i.test(kml)) return kmlBuf;
+
+  const zip = await JSZip.loadAsync(kmzBuf);
+  const entries = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
+  const byLowerName = new Map(entries.map((n) => [n.toLowerCase(), n]));
+  const byBaseName = new Map(entries.map((n) => [n.split("/").pop()!.toLowerCase(), n]));
+
+  const hrefs = new Set<string>();
+  for (const m of kml.matchAll(/<href>\s*([^<]+?)\s*<\/href>/gi)) hrefs.add(m[1]);
+
+  const inlined = new Map<string, string>();
+  for (const href of hrefs) {
+    // Absolute URLs already resolve on their own.
+    if (/^(https?:|data:|\/\/)/i.test(href)) continue;
+
+    const decoded = (() => { try { return decodeURIComponent(href); } catch { return href; } })();
+    const name =
+      byLowerName.get(href.toLowerCase()) ??
+      byLowerName.get(decoded.toLowerCase()) ??
+      byBaseName.get(decoded.split("/").pop()!.toLowerCase());
+    if (!name) continue;
+
+    const ext = name.split(".").pop()!.toLowerCase();
+    const mime = IMAGE_MIME[ext];
+    if (!mime) continue;
+
+    const bytes = Buffer.from(await zip.files[name].async("arraybuffer"));
+    if (bytes.length > MAX_INLINE_ASSET_BYTES) continue;
+
+    inlined.set(href, `data:${mime};base64,${bytes.toString("base64")}`);
+  }
+  if (!inlined.size) return kmlBuf;
+
+  kml = kml.replace(/<href>\s*([^<]+?)\s*<\/href>/gi, (whole, href: string) => {
+    const uri = inlined.get(href);
+    return uri ? `<href>${uri}</href>` : whole;
+  });
+  return Buffer.from(kml, "utf-8");
+}
+
 // ── Depth parsing ──────────────────────────────────────────────
 function toMeters(value: number, unit: string | null, defaultUnit = "m"): number {
   const u = (unit || defaultUnit).toLowerCase().trim();

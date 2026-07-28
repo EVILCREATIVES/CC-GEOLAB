@@ -302,6 +302,7 @@ ${rows.join("")}
       const chkMin = $<HTMLInputElement>("chkMin");
       const chkMax = $<HTMLInputElement>("chkMax");
       const chkCol = $<HTMLInputElement>("chkCol");
+      const chkOverlay = $<HTMLInputElement>("chkOverlay");
 
       const alpha = $<HTMLInputElement>("alpha");
       const opFeat = $<HTMLInputElement>("opFeat");
@@ -707,8 +708,14 @@ ${rows.join("")}
       function applyVisibilityFilters() {
         if (!ds) return;
         const fvis = folderVisibleMap();
+        const showOverlays = !!chkOverlay?.checked;
 
         for (const e of ds.entities.values) {
+          // KML <visibility>0</visibility> means the author switched this off.
+          // Latch it on first sight, because everything below overwrites
+          // e.show and would otherwise resurrect hidden features.
+          if (e.__kmlShow === undefined) e.__kmlShow = e.show !== false;
+
           const p = e.parent;
           const folderName = (p && p.name) || null;
           const inFolder =
@@ -722,15 +729,18 @@ ${rows.join("")}
           const isCol = !!e.cylinder;
           const pinEnt = isPin(e);
           const labEnt = isLabel(e);
+          // GroundOverlays land as rectangle entities.
+          const isOverlay = !!e.rectangle;
 
-          let base = inFolder;
+          let base = inFolder && e.__kmlShow;
+          if (isOverlay) base = base && showOverlays;
           if (isVein) base = base && !!chkSurf?.checked;
           if (isMin) base = base && !!chkMin?.checked;
           if (isMax) base = base && !!chkMax?.checked;
           if (isCol) base = base && !!chkCol?.checked;
 
           if (pinEnt || labEnt) {
-            e.show = inFolder;
+            e.show = inFolder && e.__kmlShow;
             if (e.point) e.point.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.label) {
@@ -1187,6 +1197,7 @@ ${rows.join("")}
         chkMin,
         chkMax,
         chkCol,
+        chkOverlay,
       ].forEach((el) =>
         el?.addEventListener("change", () => {
           if (ds) applyVisibilityFilters();
@@ -1946,6 +1957,9 @@ ${rows.join("")}
                   </label>
                   <label>
                     <input id="chkCol" type="checkbox" defaultChecked /> Columns
+                  </label>
+                  <label title="Image overlays baked into the source file">
+                    <input id="chkOverlay" type="checkbox" defaultChecked /> Overlays
                   </label>
                 </div>
               </td>

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { processKml, unzipKmzToKml, type ConvertOptions } from "@/lib/kmz-converter";
+import { processKml, unzipKmzToKml, inlineKmzAssets, type ConvertOptions } from "@/lib/kmz-converter";
 import { put } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
 import { getClientInfo } from "@/lib/auth";
@@ -35,9 +35,13 @@ export async function POST(request: Request) {
       logs.push(msg);
     };
 
-    // Extract KML from KMZ if needed
+    // Extract KML from KMZ if needed. We respond with bare KML, so any image
+    // packed alongside it (GroundOverlay icons, custom pin sprites) has to be
+    // inlined as a data: URI or it would resolve to nothing in the viewer.
     const isKmz = fileName.toLowerCase().endsWith(".kmz");
-    const kmlBytes = isKmz ? await unzipKmzToKml(inputBuf) : inputBuf;
+    const kmlBytes = isKmz
+      ? await inlineKmzAssets(await unzipKmzToKml(inputBuf), inputBuf)
+      : inputBuf;
 
     // Process KML (DEM elevations, 3D depth structures)
     const { kml: outKml, centroid } = await processKml(kmlBytes, opts, onProgress);
