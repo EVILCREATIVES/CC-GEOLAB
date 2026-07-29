@@ -37,6 +37,52 @@ a {
   width: min(40%, 540px);
 }
 
+/* Collapsed, the panel is just its toggle — it must not keep reserving the
+   540px box, or the button ends up stranded in the middle of the map. */
+.geo-toolbar.is-collapsed {
+  width: auto !important;
+  /* the mobile rule pins both edges — release the right one so the pill
+     hugs the corner the panel opens from instead of stretching across */
+  right: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.geo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(8, 12, 18, 0.82);
+  color: #e7eef8;
+  border: 1px solid #4a5a6a;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.geo-toggle:hover {
+  background: rgba(20, 32, 46, 0.95);
+  border-color: #2ea8ff;
+  color: #fff;
+}
+
+.geo-toggle:focus-visible {
+  outline: 2px solid #2ea8ff;
+  outline-offset: 2px;
+}
+
+.geo-toggle svg {
+  flex: 0 0 auto;
+}
+
 .geo-toolbar label {
   display: inline-flex;
   align-items: center;

@@ -167,6 +167,7 @@ export default function CesiumKMZ() {
   const rootRef = useRef<HTMLDivElement>(null);
   const { setSummary, setProcessedKml, user } = useGeoData();
   const [adminOpen, setAdminOpen] = useState(false);
+  const [toolbarOpen, setToolbarOpen] = useState(true);
 
   // ── Layers panel ──────────────────────────────────────────────
   // The tree is React state, but the Cesium side is imperative, so the hidden
@@ -402,6 +403,19 @@ ${rows.join("")}
       const hasProp = (e: any, key: string) => e.properties && e.properties[key] != null;
       const colorOfFolder = (name: string) => FOLDER_COLOR[name] || Cesium.Color.WHITE;
 
+      /**
+       * Casing colour for a feature: the opposite luminance of its fill, so
+       * the shape keeps an edge against whatever is behind it. Oil is pure
+       * black and the night-side globe is too — without this the outline is
+       * the only thing separating them.
+       */
+      function strokeFor(col: any) {
+        const lum = 0.2126 * col.red + 0.7152 * col.green + 0.0722 * col.blue;
+        return lum < 0.45
+          ? Cesium.Color.WHITE.withAlpha(0.9)
+          : Cesium.Color.fromBytes(10, 10, 10, 235);
+      }
+
       function colorizeFolder(dsLocal: any, folderName: string) {
         const col = colorOfFolder(folderName);
         if (!col) return;
@@ -410,9 +424,16 @@ ${rows.join("")}
           const p = e.parent;
           if (!p || p.name !== folderName) continue;
 
+          const stroke = strokeFor(col);
+
           if (e.point) e.point.color = col;
           if (e.billboard) e.billboard.color = col;
-          if (e.label) e.label.fillColor = col;
+          if (e.label) {
+            e.label.fillColor = col;
+            e.label.outlineColor = stroke;
+            e.label.outlineWidth = 3;
+            e.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
+          }
 
           if (e.polyline) {
             let width = 2.0;
@@ -426,12 +447,19 @@ ${rows.join("")}
 
             const isMax = e.name && /\bmax\b/i.test(e.name);
             if (isMax) {
+              // A dashed line cannot also carry an outline material, so the
+              // casing goes into the gaps instead.
               e.polyline.material = new Cesium.PolylineDashMaterialProperty({
                 color: col,
+                gapColor: stroke.withAlpha(0.35),
                 dashLength: 32,
               });
             } else {
-              e.polyline.material = col;
+              e.polyline.material = new Cesium.PolylineOutlineMaterialProperty({
+                color: col,
+                outlineColor: stroke,
+                outlineWidth: 2,
+              });
             }
             if (e.polyline.clampToGround) e.polyline.zIndex = 1;
           }
@@ -439,7 +467,8 @@ ${rows.join("")}
           if (e.polygon) {
             e.polygon.material = col.withAlpha(0.25);
             e.polygon.outline = true;
-            e.polygon.outlineColor = col;
+            e.polygon.outlineColor = stroke;
+            e.polygon.outlineWidth = 2;
           }
         }
       }
@@ -514,12 +543,53 @@ ${rows.join("")}
       // onto 3D terrain, so we give them a translucent face of our own.
       const SURVEY_COLOR = Cesium.Color.fromBytes(0, 229, 255, 255);
 
-      function isSurveyAreaEntity(e: any): boolean {
-        if (!e.polygon) return false;
+      /** Does this entity belong to the survey boundary, by name or by folder? */
+      function inSurveyArea(e: any): boolean {
         for (let node = e, i = 0; node && i < 5; node = node.parent, i++) {
           if (/\bsurvey\s*area\b/i.test(node.name || "")) return true;
         }
         return /\b(sq|square)\s*(mile|miles|km|kilometre|kilometer)\b/i.test(e.name || "");
+      }
+
+      function isSurveyAreaEntity(e: any): boolean {
+        return !!e.polygon && inSurveyArea(e);
+      }
+
+      /**
+       * Colour every pin like the feature it belongs to.
+       *
+       * KML pins arrive as pushpin billboards, and a billboard's colour only
+       * multiplies its icon — tinting one with oil-black leaves a black pin on
+       * black imagery, and a billboard cannot carry an outline. So a pin whose
+       * commodity we can resolve becomes a dot in exactly that colour with a
+       * contrast ring around it; anything we cannot resolve keeps its pushpin.
+       */
+      function stylePins() {
+        if (!ds) return;
+        for (const e of ds.entities.values) {
+          if (!isPin(e)) continue;
+
+          const col =
+            resolveDepositColor(e) ||
+            (inSurveyArea(e) ? SURVEY_COLOR : null) ||
+            (e.parent?.name ? FOLDER_COLOR[e.parent.name] : null);
+          if (!col) continue;
+
+          if (!e.point) {
+            e.point = new Cesium.PointGraphics({ pixelSize: 9 });
+            // Inherit the pushpin's placement so swapping the marker moves
+            // nothing — only its colour and shape change.
+            if (e.billboard) {
+              e.point.heightReference = e.billboard.heightReference;
+              e.point.disableDepthTestDistance = e.billboard.disableDepthTestDistance;
+            }
+          }
+          e.point.color = col;
+          e.point.outlineColor = strokeFor(col);
+          e.point.outlineWidth = 2;
+
+          if (e.billboard) e.__pinReplaced = true;
+        }
       }
 
       function styleSurveyAreas() {
@@ -728,9 +798,13 @@ ${rows.join("")}
           touch(e.polyline, "material", "polylineColor");
           touch(e.cylinder, "material", "cylinderFill");
           touch(e.point, "color", "pointColor");
+          touch(e.point, "outlineColor", "pointLine");
           touch(e.billboard, "color", "billboardColor");
           touch(e.label, "fillColor", "labelFill");
           touch(e.label, "outlineColor", "labelLine");
+          // Line casings live on the material itself, not the graphics object.
+          touch(e.polyline?.material, "outlineColor", "polylineStroke");
+          touch(e.polyline?.material, "gapColor", "polylineGap");
         }
         viewer.scene.requestRender();
       }
@@ -860,7 +934,10 @@ ${rows.join("")}
           if (pinEnt || labEnt) {
             e.show = inFolder && !treeHidden(e);
             if (e.point) e.point.show = new Cesium.ConstantProperty(!!chkPins?.checked);
-            if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked);
+            // A pushpin swapped for a coloured dot stays off, or both draw.
+            if (e.billboard) {
+              e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked && !e.__pinReplaced);
+            }
             if (e.label) {
               const isMinMax = isMinLine(e) || isMaxLine(e) || isMinPin(e) || isMinMaxPinLike(e);
               const showLabel = !!chkLabels?.checked && !isMinMax;
@@ -911,8 +988,9 @@ ${rows.join("")}
               // Color by commodity with transparency so we can see through
               const depColor = resolveDepositColor(e) || Cesium.Color.MAGENTA;
               e.polygon.material = depColor.withAlpha(DEPOSIT_ALPHA);
+              e.polygon.outlineWidth = 2;
               e.polygon.outline = true;
-              e.polygon.outlineColor = depColor.withAlpha(0.8);
+              e.polygon.outlineColor = strokeFor(depColor);
               continue;
             }
             const hasExtruded =
@@ -945,6 +1023,7 @@ ${rows.join("")}
         }
 
         styleSurveyAreas();
+        stylePins();
 
         await buildColumnsByFolder();
         applyVisibilityFilters();
@@ -1941,7 +2020,7 @@ ${rows.join("")}
 
       <div
         id="toolbar"
-        className="geo-toolbar"
+        className={`geo-toolbar${toolbarOpen ? "" : " is-collapsed"}`}
         style={{
           position: "absolute",
           top: 10,
@@ -1959,40 +2038,26 @@ ${rows.join("")}
         onPointerUp={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          id="toggleToolbar"
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 10,
-            zIndex: 1100,
-            background: "#222",
-            color: "#fff",
-            border: "1px solid #555",
-            borderRadius: 4,
-            padding: "3px 8px",
-            font: "12px system-ui,sans-serif",
-            cursor: "pointer",
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            const tb = document.getElementById("toolbar");
-            const table = tb?.querySelector("table") as HTMLTableElement | null;
-            if (!tb || !table) return;
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: toolbarOpen ? 4 : 0 }}>
+          <button
+            id="toggleToolbar"
+            className="geo-toggle"
+            aria-expanded={toolbarOpen}
+            aria-controls="toolbarBody"
+            title={toolbarOpen ? "Hide the controls panel" : "Show the controls panel"}
+            onClick={(e) => {
+              e.stopPropagation();
+              setToolbarOpen((o) => !o);
+            }}
+          >
+            {toolbarOpen ? <CloseIcon /> : <PanelIcon />}
+            {toolbarOpen ? "Hide" : "Controls"}
+          </button>
+        </div>
 
-            const showing = table.style.display === "none";
-            table.style.display = showing ? "table" : "none";
-            (e.target as HTMLButtonElement).textContent = showing ? "Hide" : "Show";
-
-            tb.style.background = showing ? "#000c" : "transparent";
-            tb.style.border = showing ? "1px solid #444" : "none";
-            tb.style.padding = showing ? "8px 10px" : "4px 10px";
-          }}
-        >
-          Hide
-        </button>
-
-        <table>
+        {/* Kept mounted while collapsed: the Cesium layer holds references to
+            these inputs by id, and unmounting them would detach the handlers. */}
+        <table id="toolbarBody" style={{ display: toolbarOpen ? "table" : "none" }}>
           <tbody>
             <tr>
               <td>
@@ -2160,6 +2225,26 @@ ${rows.join("")}
       </div>
       {adminOpen && <AdminPanel mode="overlay" onClose={() => setAdminOpen(false)} />}
     </div>
+  );
+}
+
+/* ── Toolbar toggle icons ────────────────────────────────────── */
+
+function PanelIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
   );
 }
 
