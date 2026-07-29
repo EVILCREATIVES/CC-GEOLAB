@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import * as React from "react";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useGeoData, type GeoEntity, type GeoFileSummary, type UserInfo } from "@/context/GeoDataContext";
 import AdminPanel from "@/components/AdminPanel";
 
@@ -150,12 +150,58 @@ ${wallPms}`;
   return result;
 }
 
+/** One row of the Layers tree: a folder, a feature, or a group of features. */
+type LayerNode = {
+  key: string;
+  name: string;
+  /** entity ids this row switches — a folder carries its own, children follow via the parent chain */
+  ids: string[];
+  children: LayerNode[];
+  /** how many features sit at or beneath this row */
+  count: number;
+};
+
 export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const { setSummary, setProcessedKml, user } = useGeoData();
   const [adminOpen, setAdminOpen] = useState(false);
+
+  // ── Layers panel ──────────────────────────────────────────────
+  // The tree is React state, but the Cesium side is imperative, so the hidden
+  // set lives in a ref that applyVisibilityFilters can read synchronously.
+  const [layerTree, setLayerTree] = useState<LayerNode[]>([]);
+  const [hiddenLayers, setHiddenLayers] = useState<string[]>([]);
+  const hiddenRef = useRef<Set<string>>(new Set());
+  const applyVisRef = useRef<(() => void) | null>(null);
+
+  const toggleLayer = useCallback((ids: string[], hide: boolean) => {
+    const next = new Set(hiddenRef.current);
+    for (const id of ids) {
+      if (hide) next.add(id);
+      else next.delete(id);
+    }
+    hiddenRef.current = next;
+    setHiddenLayers(Array.from(next));
+    applyVisRef.current?.();
+  }, []);
+
+  const setAllLayers = useCallback((hide: boolean) => {
+    const next = new Set<string>();
+    if (hide) {
+      const walk = (nodes: LayerNode[]) => {
+        for (const n of nodes) {
+          n.ids.forEach((id) => next.add(id));
+          walk(n.children);
+        }
+      };
+      walk(layerTree);
+    }
+    hiddenRef.current = next;
+    setHiddenLayers(Array.from(next));
+    applyVisRef.current?.();
+  }, [layerTree]);
 
   useEffect(() => {
     const rootNode = rootRef.current;
@@ -705,6 +751,67 @@ ${rows.join("")}
         };
       }
 
+      /** True when this entity, or anything it hangs off, is switched off in the Layers tree. */
+      function treeHidden(e: any): boolean {
+        const hid = hiddenRef.current;
+        if (!hid.size) return false;
+        for (let n = e, i = 0; n && i < 12; n = n.parent, i++) {
+          if (hid.has(n.id)) return true;
+        }
+        return false;
+      }
+
+      /**
+       * Mirror the loaded data source into the Layers tree.
+       *
+       * Volume walls are rolled up into a single row per folder — a deposit
+       * box contributes dozens of them and they are never toggled one by one.
+       */
+      function emitLayerTree(dsLocal: any) {
+        const byParent = new Map<string, any[]>();
+        const ROOT = "__root__";
+        for (const e of dsLocal.entities.values) {
+          const pid = e.parent?.id ?? ROOT;
+          if (!byParent.has(pid)) byParent.set(pid, []);
+          byParent.get(pid)!.push(e);
+        }
+
+        const isWall = (e: any) => /\bwall\s*\d+\s*$/i.test(e.name || "");
+
+        const build = (e: any): LayerNode => {
+          const node: LayerNode = {
+            key: e.id,
+            name: e.name || "(unnamed)",
+            ids: [e.id],
+            children: childNodes(e.id),
+            count: 1,
+          };
+          node.count = node.children.length
+            ? node.children.reduce((n, c) => n + c.count, 0)
+            : 1;
+          return node;
+        };
+
+        const childNodes = (parentId: string): LayerNode[] => {
+          const kids = byParent.get(parentId) || [];
+          const walls = kids.filter(isWall);
+          const rest = kids.filter((k) => !isWall(k));
+          const nodes = rest.map(build);
+          if (walls.length) {
+            nodes.push({
+              key: `${parentId}::walls`,
+              name: `Volume walls (${walls.length})`,
+              ids: walls.map((w) => w.id),
+              children: [],
+              count: walls.length,
+            });
+          }
+          return nodes;
+        };
+
+        setLayerTree(childNodes(ROOT));
+      }
+
       function applyVisibilityFilters() {
         if (!ds) return;
         const fvis = folderVisibleMap();
@@ -732,7 +839,7 @@ ${rows.join("")}
           // GroundOverlays land as rectangle entities.
           const isOverlay = !!e.rectangle;
 
-          let base = inFolder && e.__kmlShow;
+          let base = inFolder && e.__kmlShow && !treeHidden(e);
           if (isOverlay) base = base && showOverlays;
           if (isVein) base = base && !!chkSurf?.checked;
           if (isMin) base = base && !!chkMin?.checked;
@@ -740,7 +847,7 @@ ${rows.join("")}
           if (isCol) base = base && !!chkCol?.checked;
 
           if (pinEnt || labEnt) {
-            e.show = inFolder && e.__kmlShow;
+            e.show = inFolder && e.__kmlShow && !treeHidden(e);
             if (e.point) e.point.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.label) {
@@ -756,6 +863,9 @@ ${rows.join("")}
         }
         viewer.scene.requestRender();
       }
+
+      // Let the React-side Layers panel re-run the filter after a toggle.
+      applyVisRef.current = applyVisibilityFilters;
 
       async function applyAll() {
         ["Cu", "Au", "Oil", "H2O", "Gas", "Void"].forEach((n) => colorizeFolder(ds, n));
@@ -1020,8 +1130,12 @@ ${rows.join("")}
         if (ds) viewer.dataSources.remove(ds, true);
 
         const name = (file.name || "upload").toLowerCase();
-        // Any previously converted KML no longer matches what's on screen.
+        // Any previously converted KML no longer matches what's on screen,
+        // and the old layer tree refers to entities that are being dropped.
         setProcessedKml(null);
+        setLayerTree([]);
+        hiddenRef.current = new Set();
+        setHiddenLayers([]);
 
         const loadKmlXml = async (xml: Document, sourceName: string) => {
           ds = await Cesium.KmlDataSource.load(xml, {
@@ -1036,6 +1150,7 @@ ${rows.join("")}
           await applyAll();
           await flyCloserToDataSource(ds);
           emitSummary(ds, sourceName);
+          emitLayerTree(ds);
 
           if (btnLoad) btnLoad.disabled = false;
         };
@@ -1161,6 +1276,7 @@ ${rows.join("")}
           await applyAll();
           await flyCloserToDataSource(ds);
           emitSummary(ds, file.name || "upload");
+          emitLayerTree(ds);
 
           if (btnLoad) btnLoad.disabled = false;
         } catch (err) {
@@ -1978,6 +2094,17 @@ ${rows.join("")}
 
             <tr>
               <td>
+                <LayersPanel
+                  tree={layerTree}
+                  hidden={hiddenLayers}
+                  onToggle={toggleLayer}
+                  onSetAll={setAllLayers}
+                />
+              </td>
+            </tr>
+
+            <tr>
+              <td>
                 <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Legend</div>
                 <div
                   style={{
@@ -2022,6 +2149,173 @@ ${rows.join("")}
       </div>
       {adminOpen && <AdminPanel mode="overlay" onClose={() => setAdminOpen(false)} />}
     </div>
+  );
+}
+
+/* ── Layers panel ────────────────────────────────────────────── */
+
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {off ? (
+        <>
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+          <line x1="1" y1="1" x2="23" y2="23" />
+        </>
+      ) : (
+        <>
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function LayerRow({
+  node, hiddenSet, parentHidden, depth, onToggle,
+}: {
+  node: LayerNode;
+  hiddenSet: Set<string>;
+  parentHidden: boolean;
+  depth: number;
+  onToggle: (ids: string[], hide: boolean) => void;
+}) {
+  const [open, setOpen] = useState(depth === 0);
+  const hasKids = node.children.length > 0;
+  const selfHidden = node.ids.some((id) => hiddenSet.has(id));
+  // A row reads as off when it, or anything above it, is switched off.
+  const effectivelyOff = parentHidden || selfHidden;
+
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "1px 0",
+          paddingLeft: depth * 11,
+          fontSize: 11,
+          color: effectivelyOff ? "#666" : "#ccc",
+        }}
+      >
+        <button
+          onClick={() => hasKids && setOpen((o) => !o)}
+          disabled={!hasKids}
+          aria-label={hasKids ? (open ? "Collapse" : "Expand") : undefined}
+          style={{
+            width: 12, background: "none", border: "none", padding: 0,
+            color: "#777", cursor: hasKids ? "pointer" : "default",
+            fontSize: 9, lineHeight: 1, flex: "0 0 auto",
+          }}
+        >
+          {hasKids ? (open ? "▼" : "▶") : ""}
+        </button>
+
+        <button
+          onClick={() => onToggle(node.ids, !selfHidden)}
+          title={selfHidden ? "Show" : "Hide"}
+          aria-pressed={!effectivelyOff}
+          style={{
+            display: "flex", alignItems: "center", background: "none",
+            border: "none", padding: 0, cursor: "pointer", flex: "0 0 auto",
+            color: effectivelyOff ? "#555" : "#4af",
+          }}
+        >
+          <EyeIcon off={effectivelyOff} />
+        </button>
+
+        <span
+          onClick={() => onToggle(node.ids, !selfHidden)}
+          title={node.name}
+          style={{
+            flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+            whiteSpace: "nowrap", cursor: "pointer",
+            textDecoration: selfHidden ? "line-through" : "none",
+          }}
+        >
+          {node.name}
+        </span>
+
+        {hasKids && <span style={{ color: "#666", fontSize: 9 }}>{node.count}</span>}
+      </div>
+
+      {open &&
+        node.children.map((c) => (
+          <LayerRow
+            key={c.key}
+            node={c}
+            hiddenSet={hiddenSet}
+            parentHidden={effectivelyOff}
+            depth={depth + 1}
+            onToggle={onToggle}
+          />
+        ))}
+    </>
+  );
+}
+
+/**
+ * Google-Earth-style layer tree: every folder, feature and vein gets an eye
+ * toggle. Hiding a folder hides everything under it, and the child rows keep
+ * their own state so they come back as they were.
+ */
+function LayersPanel({
+  tree, hidden, onToggle, onSetAll,
+}: {
+  tree: LayerNode[];
+  hidden: string[];
+  onToggle: (ids: string[], hide: boolean) => void;
+  onSetAll: (hide: boolean) => void;
+}) {
+  const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
+  const total = useMemo(() => tree.reduce((n, t) => n + t.count, 0), [tree]);
+
+  const btn: React.CSSProperties = {
+    background: "none", border: "1px solid rgba(137,168,201,0.25)", borderRadius: 3,
+    color: "#888", fontSize: 9, padding: "1px 6px", cursor: "pointer",
+  };
+
+  return (
+    <details open style={{ marginTop: 2 }}>
+      <summary style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
+        🗂 Layers{total ? ` (${total})` : ""}
+      </summary>
+
+      {!tree.length ? (
+        <p style={{ color: "#666", fontSize: 11, margin: "4px 0 0" }}>Load a file to list its layers.</p>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 4, margin: "2px 0 4px" }}>
+            <button onClick={() => onSetAll(false)} style={btn}>Show all</button>
+            <button onClick={() => onSetAll(true)} style={btn}>Hide all</button>
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto", overflowX: "hidden", paddingRight: 2 }}>
+            {tree.map((n) => (
+              <LayerRow
+                key={n.key}
+                node={n}
+                hiddenSet={hiddenSet}
+                parentHidden={false}
+                depth={0}
+                onToggle={onToggle}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </details>
   );
 }
 
