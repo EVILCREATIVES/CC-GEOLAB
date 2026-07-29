@@ -404,17 +404,14 @@ ${rows.join("")}
       const colorOfFolder = (name: string) => FOLDER_COLOR[name] || Cesium.Color.WHITE;
 
       /**
-       * Casing colour for a feature: the opposite luminance of its fill, so
-       * the shape keeps an edge against whatever is behind it. Oil is pure
-       * black and the night-side globe is too — without this the outline is
-       * the only thing separating them.
+       * One casing colour for everything on the map. Red is the only hue no
+       * commodity uses, so an outline never reads as a fill, and it separates
+       * from both dark imagery and bright desert without having to guess at
+       * what is behind the feature.
        */
-      function strokeFor(col: any) {
-        const lum = 0.2126 * col.red + 0.7152 * col.green + 0.0722 * col.blue;
-        return lum < 0.45
-          ? Cesium.Color.WHITE.withAlpha(0.9)
-          : Cesium.Color.fromBytes(10, 10, 10, 235);
-      }
+      const STROKE_COLOR = Cesium.Color.fromBytes(255, 40, 40, 240);
+      const STROKE_WIDTH = 2;
+      const PIN_SIZE = 13;
 
       function colorizeFolder(dsLocal: any, folderName: string) {
         const col = colorOfFolder(folderName);
@@ -424,16 +421,11 @@ ${rows.join("")}
           const p = e.parent;
           if (!p || p.name !== folderName) continue;
 
-          const stroke = strokeFor(col);
-
+          // Colours only — strokes are applied to every layer afterwards by
+          // applyStrokes(), so nothing depends on folder membership for them.
           if (e.point) e.point.color = col;
           if (e.billboard) e.billboard.color = col;
-          if (e.label) {
-            e.label.fillColor = col;
-            e.label.outlineColor = stroke;
-            e.label.outlineWidth = 3;
-            e.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
-          }
+          if (e.label) e.label.fillColor = col;
 
           if (e.polyline) {
             let width = 2.0;
@@ -444,31 +436,58 @@ ${rows.join("")}
               width = 2.0;
             }
             e.polyline.width = Math.max(1.0, width || 2.0);
-
-            const isMax = e.name && /\bmax\b/i.test(e.name);
-            if (isMax) {
-              // A dashed line cannot also carry an outline material, so the
-              // casing goes into the gaps instead.
-              e.polyline.material = new Cesium.PolylineDashMaterialProperty({
-                color: col,
-                gapColor: stroke.withAlpha(0.35),
-                dashLength: 32,
-              });
-            } else {
-              e.polyline.material = new Cesium.PolylineOutlineMaterialProperty({
-                color: col,
-                outlineColor: stroke,
-                outlineWidth: 2,
-              });
-            }
+            e.polyline.material = col;
             if (e.polyline.clampToGround) e.polyline.zIndex = 1;
           }
 
           if (e.polygon) {
             e.polygon.material = col.withAlpha(0.25);
+          }
+        }
+      }
+
+      /**
+       * Outline every drawn feature in the same red, whatever folder it came
+       * from — survey boundaries, faults, deposit volumes, imported shapes.
+       * Runs after the colour passes so it is the last word on strokes.
+       */
+      function applyStrokes() {
+        if (!ds) return;
+        for (const e of ds.entities.values) {
+          if (e.polygon) {
             e.polygon.outline = true;
-            e.polygon.outlineColor = stroke;
-            e.polygon.outlineWidth = 2;
+            e.polygon.outlineColor = STROKE_COLOR;
+            e.polygon.outlineWidth = STROKE_WIDTH;
+          }
+
+          if (e.polyline) {
+            const col = readColor(e.polyline.material) || Cesium.Color.WHITE;
+            if (isMaxLine(e)) {
+              // A dashed line cannot also carry an outline material, so the
+              // casing goes into the gaps instead.
+              e.polyline.material = new Cesium.PolylineDashMaterialProperty({
+                color: col,
+                gapColor: STROKE_COLOR.withAlpha(0.4),
+                dashLength: 32,
+              });
+            } else {
+              e.polyline.material = new Cesium.PolylineOutlineMaterialProperty({
+                color: col,
+                outlineColor: STROKE_COLOR,
+                outlineWidth: STROKE_WIDTH,
+              });
+            }
+          }
+
+          if (e.point) {
+            e.point.outlineColor = STROKE_COLOR;
+            e.point.outlineWidth = STROKE_WIDTH;
+          }
+
+          if (e.label) {
+            e.label.outlineColor = STROKE_COLOR;
+            e.label.outlineWidth = 3;
+            e.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
           }
         }
       }
@@ -576,17 +595,18 @@ ${rows.join("")}
           if (!col) continue;
 
           if (!e.point) {
-            e.point = new Cesium.PointGraphics({ pixelSize: 9 });
+            e.point = new Cesium.PointGraphics();
             // Inherit the pushpin's placement so swapping the marker moves
             // nothing — only its colour and shape change.
-            if (e.billboard) {
-              e.point.heightReference = e.billboard.heightReference;
-              e.point.disableDepthTestDistance = e.billboard.disableDepthTestDistance;
-            }
+            if (e.billboard) e.point.heightReference = e.billboard.heightReference;
           }
+          e.point.pixelSize = PIN_SIZE;
           e.point.color = col;
-          e.point.outlineColor = strokeFor(col);
-          e.point.outlineWidth = 2;
+          e.point.outlineColor = STROKE_COLOR;
+          e.point.outlineWidth = STROKE_WIDTH;
+          // Pushpins were drawn on top of everything; a dot has to be told to
+          // do the same or terrain and deposit volumes swallow it.
+          e.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
 
           if (e.billboard) e.__pinReplaced = true;
         }
@@ -598,10 +618,21 @@ ${rows.join("")}
           if (!isSurveyAreaEntity(e) || is3dDepth(e)) continue;
           e.polygon.fill = true;
           e.polygon.material = SURVEY_COLOR.withAlpha(0.25);
-          e.polygon.outline = true;
-          e.polygon.outlineColor = SURVEY_COLOR.withAlpha(0.95);
-          e.polygon.outlineWidth = 2;
+          // Outline comes from applyStrokes, same red as every other layer.
         }
+      }
+
+      /** Does this polygon carry real per-vertex elevations, or is it flat at sea level? */
+      function polygonHasHeights(pg: any, now: any): boolean {
+        try {
+          const hier = pg.hierarchy?.getValue ? pg.hierarchy.getValue(now) : pg.hierarchy;
+          const positions = hier?.positions || hier?._positions || [];
+          for (const p of positions) {
+            const carto = Cesium.Cartographic.fromCartesian(p);
+            if (carto && Math.abs(carto.height) > 1) return true;
+          }
+        } catch { /* treat as flat */ }
+        return false;
       }
 
       function drapePolygonToGround(pg: any, owner?: any) {
@@ -988,15 +1019,19 @@ ${rows.join("")}
               // Color by commodity with transparency so we can see through
               const depColor = resolveDepositColor(e) || Cesium.Color.MAGENTA;
               e.polygon.material = depColor.withAlpha(DEPOSIT_ALPHA);
-              e.polygon.outlineWidth = 2;
-              e.polygon.outline = true;
-              e.polygon.outlineColor = strokeFor(depColor);
+              // Outline comes from applyStrokes.
               continue;
             }
             const hasExtruded =
               e.polygon.extrudedHeight &&
               (e.polygon.extrudedHeight.getValue?.(now) ?? e.polygon.extrudedHeight) !== undefined;
-            if (!hasExtruded) drapePolygonToGround(e.polygon, e);
+            // Draping is for flat 2D shapes only. A polygon that carries real
+            // elevations keeps them — partly because that is where it belongs,
+            // and partly because Cesium cannot outline a terrain-draped
+            // polygon, so draping would silently drop its stroke.
+            if (!hasExtruded && !polygonHasHeights(e.polygon, now)) {
+              drapePolygonToGround(e.polygon, e);
+            }
           }
         }
 
@@ -1024,6 +1059,7 @@ ${rows.join("")}
 
         styleSurveyAreas();
         stylePins();
+        applyStrokes();
 
         await buildColumnsByFolder();
         applyVisibilityFilters();
