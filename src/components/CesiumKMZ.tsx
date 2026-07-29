@@ -809,7 +809,18 @@ ${rows.join("")}
           return nodes;
         };
 
+        // Seed the tree from the file's own <visibility> flags rather than
+        // enforcing them separately. A feature the author switched off starts
+        // with its eye closed — which is honest about what is on screen, and
+        // leaves the user free to switch it back on.
+        const authoredOff: string[] = [];
+        for (const e of dsLocal.entities.values) {
+          if (e.__kmlShow === false) authoredOff.push(e.id);
+        }
+        hiddenRef.current = new Set(authoredOff);
+        setHiddenLayers(authoredOff);
         setLayerTree(childNodes(ROOT));
+        applyVisibilityFilters();
       }
 
       function applyVisibilityFilters() {
@@ -819,8 +830,8 @@ ${rows.join("")}
 
         for (const e of ds.entities.values) {
           // KML <visibility>0</visibility> means the author switched this off.
-          // Latch it on first sight, because everything below overwrites
-          // e.show and would otherwise resurrect hidden features.
+          // Latch it before the lines below overwrite e.show — emitLayerTree
+          // reads it to seed the Layers tree, which is what enforces it.
           if (e.__kmlShow === undefined) e.__kmlShow = e.show !== false;
 
           const p = e.parent;
@@ -839,7 +850,7 @@ ${rows.join("")}
           // GroundOverlays land as rectangle entities.
           const isOverlay = !!e.rectangle;
 
-          let base = inFolder && e.__kmlShow && !treeHidden(e);
+          let base = inFolder && !treeHidden(e);
           if (isOverlay) base = base && showOverlays;
           if (isVein) base = base && !!chkSurf?.checked;
           if (isMin) base = base && !!chkMin?.checked;
@@ -847,7 +858,7 @@ ${rows.join("")}
           if (isCol) base = base && !!chkCol?.checked;
 
           if (pinEnt || labEnt) {
-            e.show = inFolder && e.__kmlShow && !treeHidden(e);
+            e.show = inFolder && !treeHidden(e);
             if (e.point) e.point.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.label) {
