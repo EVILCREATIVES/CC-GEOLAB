@@ -469,9 +469,11 @@ ${rows.join("")}
       }
 
       /**
-       * Outline every drawn feature in the same red, whatever folder it came
+       * Outline every drawn shape in the same red, whatever folder it came
        * from — survey boundaries, faults, deposit volumes, imported shapes.
        * Runs after the colour passes so it is the last word on strokes.
+       *
+       * Geometry only: pins and label text are left exactly as they are.
        */
       function applyStrokes() {
         if (!ds) return;
@@ -501,13 +503,8 @@ ${rows.join("")}
             }
           }
 
-          // Pins are left alone on purpose — no ring, full opacity.
-
-          if (e.label) {
-            e.label.outlineColor = STROKE_COLOR;
-            e.label.outlineWidth = 3;
-            e.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
-          }
+          // Pins and label text are left alone on purpose — a casing belongs
+          // on a shape, not around a glyph.
         }
       }
 
