@@ -161,6 +161,27 @@ type LayerNode = {
   count: number;
 };
 
+/**
+ * A map-pin sprite in a given colour, as a self-contained data URI.
+ *
+ * Tinting the KML pushpin is not enough: a billboard's colour multiplies its
+ * icon, so a violet tint on a yellow pushpin comes out brown. Drawing the pin
+ * ourselves is the only way its colour actually matches the feature it marks.
+ */
+const PIN_IMAGE_CACHE = new Map<string, string>();
+function pinImageUri(cssColor: string): string {
+  const cached = PIN_IMAGE_CACHE.get(cssColor);
+  if (cached) return cached;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40">` +
+    `<path d="M14 0C6.27 0 0 6.27 0 14c0 9.8 12.3 24.5 12.83 25.12a1.53 1.53 0 0 0 2.34 0C15.7 38.5 28 23.8 28 14 28 6.27 21.73 0 14 0z" fill="${cssColor}"/>` +
+    `<circle cx="14" cy="13.6" r="4.8" fill="#fff" fill-opacity="0.92"/>` +
+    `</svg>`;
+  const uri = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  PIN_IMAGE_CACHE.set(cssColor, uri);
+  return uri;
+}
+
 export default function CesiumKMZ() {
   const readyRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -360,7 +381,9 @@ ${rows.join("")}
       const FOLDER_COLOR: Record<string, any> = {
         Cu: Cesium.Color.fromBytes(184, 115, 51, 255),
         Au: Cesium.Color.fromBytes(255, 215, 0, 255),
-        Oil: Cesium.Color.fromBytes(0, 0, 0, 255),
+        // Violet, not black: oil sits on dark imagery and under a dark sky,
+        // and it is the one warm-free slot left between copper and gold.
+        Oil: Cesium.Color.fromBytes(155, 93, 229, 255),
         H2O: Cesium.Color.fromBytes(74, 134, 255, 255),
         Gas: Cesium.Color.fromBytes(110, 168, 163, 255),
         Void: Cesium.Color.fromBytes(123, 225, 52, 255),
@@ -372,7 +395,7 @@ ${rows.join("")}
         Gold:             Cesium.Color.fromBytes(255, 215, 0, 255),
         Silver:           Cesium.Color.fromBytes(192, 192, 192, 255),
         Lithium:          Cesium.Color.fromBytes(200, 230, 255, 255),
-        "Oil & Gas":      Cesium.Color.fromBytes(40, 40, 40, 255),
+        "Oil & Gas":      Cesium.Color.fromBytes(155, 93, 229, 255),
         "Ground Water":   Cesium.Color.fromBytes(74, 134, 255, 255),
         "Buried Treasure": Cesium.Color.fromBytes(218, 165, 32, 255),
         "Ship Wrecks":    Cesium.Color.fromBytes(139, 90, 43, 255),
@@ -411,7 +434,6 @@ ${rows.join("")}
        */
       const STROKE_COLOR = Cesium.Color.fromBytes(255, 40, 40, 240);
       const STROKE_WIDTH = 2;
-      const PIN_SIZE = 13;
 
       function colorizeFolder(dsLocal: any, folderName: string) {
         const col = colorOfFolder(folderName);
@@ -479,10 +501,7 @@ ${rows.join("")}
             }
           }
 
-          if (e.point) {
-            e.point.outlineColor = STROKE_COLOR;
-            e.point.outlineWidth = STROKE_WIDTH;
-          }
+          // Pins are left alone on purpose — no ring, full opacity.
 
           if (e.label) {
             e.label.outlineColor = STROKE_COLOR;
@@ -575,13 +594,12 @@ ${rows.join("")}
       }
 
       /**
-       * Colour every pin like the feature it belongs to.
+       * Colour every pin like the feature it belongs to, keeping the pushpin
+       * shape KML gives it. A billboard's colour multiplies its icon, which
+       * works now that no commodity is black.
        *
-       * KML pins arrive as pushpin billboards, and a billboard's colour only
-       * multiplies its icon — tinting one with oil-black leaves a black pin on
-       * black imagery, and a billboard cannot carry an outline. So a pin whose
-       * commodity we can resolve becomes a dot in exactly that colour with a
-       * contrast ring around it; anything we cannot resolve keeps its pushpin.
+       * Pins are deliberately left at full opacity and without a stroke —
+       * they are the labels of the scene, not part of the geometry.
        */
       function stylePins() {
         if (!ds) return;
@@ -594,21 +612,15 @@ ${rows.join("")}
             (e.parent?.name ? FOLDER_COLOR[e.parent.name] : null);
           if (!col) continue;
 
-          if (!e.point) {
-            e.point = new Cesium.PointGraphics();
-            // Inherit the pushpin's placement so swapping the marker moves
-            // nothing — only its colour and shape change.
-            if (e.billboard) e.point.heightReference = e.billboard.heightReference;
+          const opaque = col.withAlpha(1);
+          if (e.billboard) {
+            e.billboard.image = pinImageUri(opaque.toCssHexString());
+            e.billboard.color = Cesium.Color.WHITE; // no tint — the sprite is already the right colour
+            e.billboard.width = 22;
+            e.billboard.height = 31;
+            e.billboard.verticalOrigin = Cesium.VerticalOrigin.BOTTOM;
           }
-          e.point.pixelSize = PIN_SIZE;
-          e.point.color = col;
-          e.point.outlineColor = STROKE_COLOR;
-          e.point.outlineWidth = STROKE_WIDTH;
-          // Pushpins were drawn on top of everything; a dot has to be told to
-          // do the same or terrain and deposit volumes swallow it.
-          e.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-
-          if (e.billboard) e.__pinReplaced = true;
+          if (e.point) e.point.color = opaque;
         }
       }
 
@@ -828,9 +840,8 @@ ${rows.join("")}
           touch(e.polygon, "outlineColor", "polygonLine");
           touch(e.polyline, "material", "polylineColor");
           touch(e.cylinder, "material", "cylinderFill");
-          touch(e.point, "color", "pointColor");
-          touch(e.point, "outlineColor", "pointLine");
-          touch(e.billboard, "color", "billboardColor");
+          // Pins stay fully opaque — they are markers, not geometry, and
+          // fading them out is never what the Resources slider is for.
           touch(e.label, "fillColor", "labelFill");
           touch(e.label, "outlineColor", "labelLine");
           // Line casings live on the material itself, not the graphics object.
@@ -965,10 +976,7 @@ ${rows.join("")}
           if (pinEnt || labEnt) {
             e.show = inFolder && !treeHidden(e);
             if (e.point) e.point.show = new Cesium.ConstantProperty(!!chkPins?.checked);
-            // A pushpin swapped for a coloured dot stays off, or both draw.
-            if (e.billboard) {
-              e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked && !e.__pinReplaced);
-            }
+            if (e.billboard) e.billboard.show = new Cesium.ConstantProperty(!!chkPins?.checked);
             if (e.label) {
               const isMinMax = isMinLine(e) || isMaxLine(e) || isMinPin(e) || isMinMaxPinLike(e);
               const showLabel = !!chkLabels?.checked && !isMinMax;
@@ -2149,7 +2157,7 @@ ${rows.join("")}
                     <span style={sw("#FFD700")} /> Au <input id="chkAu" type="checkbox" defaultChecked />
                   </label>
                   <label>
-                    <span style={sw("#000000")} /> Oil <input id="chkOil" type="checkbox" defaultChecked />
+                    <span style={sw("#9B5DE5")} /> Oil <input id="chkOil" type="checkbox" defaultChecked />
                   </label>
                   <label>
                     <span style={sw("#4A86FF")} /> H2O <input id="chkWater" type="checkbox" defaultChecked />
@@ -2197,7 +2205,7 @@ ${rows.join("")}
               <td>
                 <div style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2 }}>
                   <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Opacity</div>
-                  <OpacitySlider id="opFeat" label="Features" defaultValue={70} />
+                  <OpacitySlider id="opFeat" label="Resources" defaultValue={70} />
                   <OpacitySlider id="opSurvey" label="Survey area" defaultValue={25} />
                   <OpacitySlider id="alpha" label="Terrain" defaultValue={40} />
                 </div>
