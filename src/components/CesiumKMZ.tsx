@@ -190,6 +190,14 @@ export default function CesiumKMZ() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [toolbarOpen, setToolbarOpen] = useState(true);
 
+  // ── Resource folders ──────────────────────────────────────────
+  // Built from whatever the loaded file actually contains, rather than a
+  // fixed list of six abbreviations — a survey whose folder is spelled
+  // "Lithium" gets a swatch and a checkbox just like one named "Li".
+  const [resourceFolders, setResourceFolders] = useState<{ name: string; label: string; hex: string }[]>([]);
+  const [hiddenResources, setHiddenResources] = useState<string[]>([]);
+  const hiddenResourcesRef = useRef<Set<string>>(new Set());
+
   // ── Layers panel ──────────────────────────────────────────────
   // The tree is React state, but the Cesium side is imperative, so the hidden
   // set lives in a ref that applyVisibilityFilters can read synchronously.
@@ -197,6 +205,15 @@ export default function CesiumKMZ() {
   const [hiddenLayers, setHiddenLayers] = useState<string[]>([]);
   const hiddenRef = useRef<Set<string>>(new Set());
   const applyVisRef = useRef<(() => void) | null>(null);
+
+  const toggleResource = useCallback((name: string, hide: boolean) => {
+    const next = new Set(hiddenResourcesRef.current);
+    if (hide) next.add(name);
+    else next.delete(name);
+    hiddenResourcesRef.current = next;
+    setHiddenResources(Array.from(next));
+    applyVisRef.current?.();
+  }, []);
 
   const toggleLayer = useCallback((ids: string[], hide: boolean) => {
     const next = new Set(hiddenRef.current);
@@ -357,12 +374,6 @@ ${rows.join("")}
       const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
 
       const up = $<HTMLInputElement>("uploader");
-      const chkCu = $<HTMLInputElement>("chkCu");
-      const chkAu = $<HTMLInputElement>("chkAu");
-      const chkOil = $<HTMLInputElement>("chkOil");
-      const chkWater = $<HTMLInputElement>("chkWater");
-      const chkGas = $<HTMLInputElement>("chkGas");
-      const chkVoid = $<HTMLInputElement>("chkVoid");
 
       const chkLabels = $<HTMLInputElement>("chkLabels");
       const chkPins = $<HTMLInputElement>("chkPins");
@@ -424,7 +435,30 @@ ${rows.join("")}
       let lastFile: File | null = null;
 
       const hasProp = (e: any, key: string) => e.properties && e.properties[key] != null;
-      const colorOfFolder = (name: string) => FOLDER_COLOR[name] || Cesium.Color.WHITE;
+
+      /** Folder names in the current file that name a resource. */
+      let resourceNames = new Set<string>();
+
+      /**
+       * Match a folder name to a resource: the six shorthands first, then the
+       * commodity table by exact name, then by whole word inside the name.
+       *
+       * Returns the matched key as well as the colour, so a folder called
+       * "Elplalito Trinadad oil prospect" can be labelled "Oil" rather than
+       * putting its whole name on a checkbox.
+       */
+      function folderMatch(name: string): { col: any; label: string } | null {
+        if (!name) return null;
+        if (FOLDER_COLOR[name]) return { col: FOLDER_COLOR[name], label: name };
+        if (COMMODITY_COLOR[name]) return { col: COMMODITY_COLOR[name], label: name };
+        for (const [key, col] of Object.entries(COMMODITY_COLOR)) {
+          const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          if (new RegExp(`\\b${escaped}\\b`, "i").test(name)) return { col, label: key };
+        }
+        return null;
+      }
+
+      const colorOfFolder = (name: string) => folderMatch(name)?.col || Cesium.Color.WHITE;
 
       /**
        * One casing colour for everything on the map. Red is the only hue no
@@ -849,15 +883,53 @@ ${rows.join("")}
         viewer.scene.requestRender();
       }
 
-      function folderVisibleMap() {
-        return {
-          Cu: !!chkCu?.checked,
-          Au: !!chkAu?.checked,
-          Oil: !!chkOil?.checked,
-          H2O: !!chkWater?.checked,
-          Gas: !!chkGas?.checked,
-          Void: !!chkVoid?.checked,
-        };
+      /**
+       * The resource folder an entity belongs to, found by walking up the
+       * chain — so switching off "Oil" also switches off the "… – 3D Depths"
+       * sub-folders the converter generated underneath it.
+       */
+      function resourceFolderOf(e: any): string | null {
+        const known = resourceNames;
+        if (!known.size) return null;
+        for (let n = e.parent, i = 0; n && i < 8; n = n.parent, i++) {
+          if (n.name && known.has(n.name)) return n.name;
+        }
+        return null;
+      }
+
+      /**
+       * Which folders in this file name a resource? Matched against the same
+       * commodity table that colours the geometry, so "Lithium", "Li" and
+       * "Ship Wrecks" are all recognised.
+       *
+       * Only folders that directly hold geometry count: the document root
+       * often contains a commodity word by accident ("CCE Scan Li Lac La
+       * Motte"), and the generated depth folders inherit one from the
+       * placemark they were built from.
+       */
+      function emitResourceFolders(dsLocal: any) {
+        const found = new Map<string, { col: any; label: string }>();
+        for (const e of dsLocal.entities.values) {
+          const hasGeometry = !!(e.polygon || e.polyline || e.point || e.billboard || e.label || e.cylinder);
+          const folder = e.parent;
+          if (!hasGeometry || !folder?.name) continue;
+
+          const name = folder.name;
+          if (found.has(name)) continue;
+          if (inSurveyArea(folder) || /3d\s*depths/i.test(name)) continue;
+
+          const hit = folderMatch(name);
+          if (hit) found.set(name, hit);
+        }
+
+        resourceNames = new Set(found.keys());
+        hiddenResourcesRef.current = new Set();
+        setHiddenResources([]);
+        setResourceFolders(
+          [...found.entries()]
+            .map(([name, hit]) => ({ name, label: hit.label, hex: hit.col.toCssHexString().slice(0, 7) }))
+            .sort((a, b) => a.label.localeCompare(b.label)),
+        );
       }
 
       /** True when this entity, or anything it hangs off, is switched off in the Layers tree. */
@@ -934,7 +1006,7 @@ ${rows.join("")}
 
       function applyVisibilityFilters() {
         if (!ds) return;
-        const fvis = folderVisibleMap();
+        const hiddenFolders = hiddenResourcesRef.current;
         const showOverlays = !!chkOverlay?.checked;
 
         for (const e of ds.entities.values) {
@@ -943,12 +1015,8 @@ ${rows.join("")}
           // reads it to seed the Layers tree, which is what enforces it.
           if (e.__kmlShow === undefined) e.__kmlShow = e.show !== false;
 
-          const p = e.parent;
-          const folderName = (p && p.name) || null;
-          const inFolder =
-            folderName && Object.prototype.hasOwnProperty.call(fvis, folderName)
-              ? (fvis as any)[folderName]
-              : true;
+          const folderName = resourceFolderOf(e);
+          const inFolder = !folderName || !hiddenFolders.has(folderName);
 
           const isVein = isPlainVeinLine(e);
           const isMin = isMinLine(e);
@@ -988,25 +1056,10 @@ ${rows.join("")}
       applyVisRef.current = applyVisibilityFilters;
 
       async function applyAll() {
-        ["Cu", "Au", "Oil", "H2O", "Gas", "Void"].forEach((n) => colorizeFolder(ds, n));
-
-        // Detect which resource folders are actually present in the data
-        const presentFolders = new Set<string>();
-        for (const e of ds.entities.values) {
-          const folder = e.parent?.name;
-          if (folder && folder in FOLDER_COLOR) presentFolders.add(folder);
-        }
-        // Show/hide resource checkboxes based on what's present
-        const chkMap: Record<string, HTMLInputElement | null> = {
-          Cu: chkCu, Au: chkAu, Oil: chkOil, H2O: chkWater, Gas: chkGas, Void: chkVoid,
-        };
-        for (const [key, chk] of Object.entries(chkMap)) {
-          const lbl = chk?.closest("label") as HTMLElement | null;
-          if (lbl) lbl.style.display = presentFolders.has(key) ? "" : "none";
-        }
-        // Hide the entire resources row if no resources detected
-        const resourcesRow = document.getElementById("resourcesRow");
-        if (resourcesRow) resourcesRow.style.display = presentFolders.size > 0 ? "" : "none";
+        // Work out which folders this file calls resources, then colour each
+        // by its own name. Both come from the data, not a fixed list.
+        emitResourceFolders(ds);
+        for (const name of resourceNames) colorizeFolder(ds, name);
 
         const now = Cesium.JulianDate.now();
 
@@ -1429,12 +1482,6 @@ ${rows.join("")}
       }
 
       [
-        chkCu,
-        chkAu,
-        chkOil,
-        chkWater,
-        chkGas,
-        chkVoid,
         chkLabels,
         chkPins,
         chkSurf,
@@ -2142,26 +2189,18 @@ ${rows.join("")}
 
             <tr>
               <td>
-                <div id="resourcesRow" style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2, display: "none" }}>
+                <div id="resourcesRow" style={{ borderBottom: "1px solid #444", paddingBottom: 6, marginBottom: 2, display: resourceFolders.length ? "" : "none" }}>
                   <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Resources</div>
-                  <label>
-                    <span style={sw("#B87333")} /> Cu <input id="chkCu" type="checkbox" defaultChecked />
-                  </label>
-                  <label>
-                    <span style={sw("#FFD700")} /> Au <input id="chkAu" type="checkbox" defaultChecked />
-                  </label>
-                  <label>
-                    <span style={sw("#9B5DE5")} /> Oil <input id="chkOil" type="checkbox" defaultChecked />
-                  </label>
-                  <label>
-                    <span style={sw("#4A86FF")} /> H2O <input id="chkWater" type="checkbox" defaultChecked />
-                  </label>
-                  <label>
-                    <span style={sw("#6EA8A3")} /> Gas <input id="chkGas" type="checkbox" defaultChecked />
-                  </label>
-                  <label>
-                    <span style={sw("#7BE134")} /> Void <input id="chkVoid" type="checkbox" defaultChecked />
-                  </label>
+                  {resourceFolders.map((f) => (
+                    <label key={f.name} title={f.name}>
+                      <span style={sw(f.hex)} /> {f.label}{" "}
+                      <input
+                        type="checkbox"
+                        checked={!hiddenResources.includes(f.name)}
+                        onChange={(ev) => toggleResource(f.name, !ev.target.checked)}
+                      />
+                    </label>
+                  ))}
                 </div>
               </td>
             </tr>
