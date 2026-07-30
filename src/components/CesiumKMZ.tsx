@@ -545,9 +545,14 @@ ${rows.join("")}
           if (chk(node)) return true;
           node = node.parent;
         }
-        // Also check entity name patterns (separate Placemark naming convention)
+        // Also check entity name patterns (separate Placemark naming
+        // convention). "min depth" / "max depth" deliberately match without
+        // requiring "polygon": the converter emits pins by those names too,
+        // and missing them clamped every underground marker to the surface.
+        // "surfaceline" is excluded on purpose — that one belongs on the
+        // ground, and clamping is the sturdier way to put it there.
         const n = (e.name || e.parent?.name || "").toLowerCase();
-        return /deposit\s*volume|depth\s*column|min depth polygon|max depth polygon/i.test(n);
+        return /deposit\s*volume|depth\s*column|\b(?:min|max)\s+depth\b/i.test(n);
       }
 
       // Resolve commodity color by walking up the entity hierarchy
