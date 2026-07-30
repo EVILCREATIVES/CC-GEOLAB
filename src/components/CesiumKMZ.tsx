@@ -473,38 +473,32 @@ ${rows.join("")}
        * from — survey boundaries, faults, deposit volumes, imported shapes.
        * Runs after the colour passes so it is the last word on strokes.
        *
-       * Geometry only: pins and label text are left exactly as they are.
+       * Areas only. Veins, pins and label text are all left alone — a casing
+       * outlines a shape; on a line it just thickens it and muddies the
+       * colour, and around a glyph or a marker it is noise.
        */
       function applyStrokes() {
         if (!ds) return;
         for (const e of ds.entities.values) {
-          if (e.polygon) {
-            e.polygon.outline = true;
-            e.polygon.outlineColor = STROKE_COLOR;
-            e.polygon.outlineWidth = STROKE_WIDTH;
-          }
+          if (!e.polygon) continue;
+          e.polygon.outline = true;
+          e.polygon.outlineColor = STROKE_COLOR;
+          e.polygon.outlineWidth = STROKE_WIDTH;
+        }
+      }
 
-          if (e.polyline) {
-            const col = readColor(e.polyline.material) || Cesium.Color.WHITE;
-            if (isMaxLine(e)) {
-              // A dashed line cannot also carry an outline material, so the
-              // casing goes into the gaps instead.
-              e.polyline.material = new Cesium.PolylineDashMaterialProperty({
-                color: col,
-                gapColor: STROKE_COLOR.withAlpha(0.4),
-                dashLength: 32,
-              });
-            } else {
-              e.polyline.material = new Cesium.PolylineOutlineMaterialProperty({
-                color: col,
-                outlineColor: STROKE_COLOR,
-                outlineWidth: STROKE_WIDTH,
-              });
-            }
-          }
-
-          // Pins and label text are left alone on purpose — a casing belongs
-          // on a shape, not around a glyph.
+      /**
+       * Vein lines draw in their own colour, unadorned. Max-depth lines keep
+       * the dash that distinguishes them from the min-depth run.
+       */
+      function styleLines() {
+        if (!ds) return;
+        for (const e of ds.entities.values) {
+          if (!e.polyline) continue;
+          const col = readColor(e.polyline.material) || Cesium.Color.WHITE;
+          e.polyline.material = isMaxLine(e)
+            ? new Cesium.PolylineDashMaterialProperty({ color: col, dashLength: 32 })
+            : col;
         }
       }
 
@@ -846,9 +840,6 @@ ${rows.join("")}
           // fading them out is never what the Resources slider is for.
           touch(e.label, "fillColor", "labelFill");
           touch(e.label, "outlineColor", "labelLine");
-          // Line casings live on the material itself, not the graphics object.
-          touch(e.polyline?.material, "outlineColor", "polylineStroke");
-          touch(e.polyline?.material, "gapColor", "polylineGap");
         }
         viewer.scene.requestRender();
       }
@@ -1069,6 +1060,7 @@ ${rows.join("")}
 
         styleSurveyAreas();
         stylePins();
+        styleLines();
         applyStrokes();
 
         await buildColumnsByFolder();
